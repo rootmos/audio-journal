@@ -182,14 +182,14 @@ public class MainActivity extends Activity {
 
         @Override
         protected void onPreExecute() {
-            int sampleRate = 44100;
+            int sampleRate = 48000;
 
             int minBufSize = AudioRecord.getMinBufferSize(sampleRate,
                     AudioFormat.CHANNEL_IN_STEREO,
                     AudioFormat.ENCODING_PCM_16BIT);
             Log.d(TAG, "recommended minimum buffer size: " + minBufSize);
 
-            int bufSize = Math.max(1810432, minBufSize);
+            int bufSize = Math.max(122880, minBufSize);
 
             while(true) {
                 recorder = new AudioRecord.Builder()
