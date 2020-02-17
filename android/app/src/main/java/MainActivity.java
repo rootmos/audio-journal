@@ -1,8 +1,12 @@
 package io.rootmos.audiojournal;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.Arrays;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 
 import android.Manifest;
 import android.app.Activity;
@@ -17,6 +21,11 @@ import android.media.AudioFormat;
 import android.content.pm.PackageManager;
 
 import androidx.core.app.ActivityCompat;
+
+import net.sourceforge.javaflacencoder.FLACEncoder;
+import net.sourceforge.javaflacencoder.FLACFileOutputStream;
+import net.sourceforge.javaflacencoder.StreamConfiguration;
+import net.sourceforge.javaflacencoder.EncodingConfiguration;
 
 public class MainActivity extends Activity {
     private static final String TAG = "AudioJournal";
@@ -118,7 +127,13 @@ public class MainActivity extends Activity {
             return;
         }
 
-        recorder = new RecordTask();
+
+        File[] rs = getExternalMediaDirs();
+        if(rs.length == 0) {
+            throw new RuntimeException("no media dirs");
+        }
+
+        recorder = new RecordTask(rs[0]);
         recorder.execute();
 
         state = State.RECORDING;
@@ -157,6 +172,13 @@ public class MainActivity extends Activity {
 
     private class RecordTask extends AsyncTask<Void, Float, Boolean> {
         private AudioRecord recorder = null;
+        private FLACEncoder encoder = null;
+        private File baseDir = null;
+        private FLACFileOutputStream out = null;
+
+        public RecordTask(File baseDir) {
+            this.baseDir = baseDir;
+        };
 
         @Override
         protected void onPreExecute() {
@@ -164,7 +186,7 @@ public class MainActivity extends Activity {
 
             int minBufSize = AudioRecord.getMinBufferSize(sampleRate,
                     AudioFormat.CHANNEL_IN_STEREO,
-                    AudioFormat.ENCODING_PCM_FLOAT);
+                    AudioFormat.ENCODING_PCM_16BIT);
             Log.d(TAG, "recommended minimum buffer size: " + minBufSize);
 
             int bufSize = Math.max(1810432, minBufSize);
@@ -172,7 +194,7 @@ public class MainActivity extends Activity {
             while(true) {
                 recorder = new AudioRecord.Builder()
                     .setAudioFormat(new AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                             .setSampleRate(sampleRate)
                             .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
                             .build())
@@ -192,8 +214,37 @@ public class MainActivity extends Activity {
                 }
             }
 
+            Log.d(TAG, "configured channel count: " + recorder.getChannelCount());
             Log.d(TAG, "configured sample rate: " + recorder.getSampleRate());
             Log.d(TAG, "configured buffer size in frames: " + recorder.getBufferSizeInFrames());
+
+            encoder = new FLACEncoder();
+            StreamConfiguration sc = new StreamConfiguration();
+            sc.setChannelCount(recorder.getChannelCount());
+            sc.setSampleRate(recorder.getSampleRate());
+            sc.setBitsPerSample(16);
+            encoder.setStreamConfiguration(sc);
+
+            EncodingConfiguration ec = new EncodingConfiguration();
+            ec.setSubframeType(EncodingConfiguration.SubframeType.EXHAUSTIVE);
+            encoder.setEncodingConfiguration(ec);
+
+            OffsetDateTime time = OffsetDateTime.now();
+
+            String fn = time.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+                + ".flac";
+            File path = new File(baseDir, fn);
+            try {
+                out = new FLACFileOutputStream(path);
+                if(!out.isValid()) {
+                    throw new RuntimeException("can't open output stream");
+                }
+                encoder.setOutputStream(out);
+                encoder.openFLACStream();
+            } catch(IOException e) {
+                throw new RuntimeException("can't open output stream", e);
+            }
+            Log.i(TAG, "recording: " + path);
 
             recorder.startRecording();
         }
@@ -205,12 +256,8 @@ public class MainActivity extends Activity {
 
             // TODO: make the chunk size configurable
             float seconds = 0;
-            float[] samples = new float[1024*channels];
-            while(true) {
-                if(isCancelled()) {
-                    return Boolean.TRUE;
-                }
-
+            short[] samples = new short[1024*channels];
+            while(!isCancelled()) {
                 int r = recorder.read(samples, 0, samples.length,
                         AudioRecord.READ_BLOCKING);
                 if(r < 0) {
@@ -218,9 +265,39 @@ public class MainActivity extends Activity {
                     return Boolean.FALSE;
                 }
                 Log.d(TAG, String.format("read %d samples of audio", r));
+
+                int[] is = new int[r];
+                for(int i = 0; i < is.length; ++i) {
+                    is[i] = samples[i];
+                }
+                encoder.addSamples(is, is.length/channels);
+
+                int enc;
+                if((enc = encoder.fullBlockSamplesAvailableToEncode()) > 0) {
+                    try {
+                        r = encoder.encodeSamples(enc, false);
+                    } catch(IOException e) {
+                        throw new RuntimeException("can't encode samples", e);
+                    }
+                    Log.d(TAG, String.format("encoded %d samples of audio", r));
+                }
+
                 seconds += (float)r / (channels * sampleRate);
                 publishProgress(seconds);
             }
+
+            try {
+                int s = encoder.samplesAvailableToEncode();
+                int r = encoder.encodeSamples(s, true);
+                if(r < s) {
+                    Log.w(TAG, "trying to encode end one more time");
+                    encoder.encodeSamples(s, true);
+                }
+            } catch(IOException e) {
+                throw new RuntimeException("can't encode samples", e);
+            }
+
+            return Boolean.TRUE;
         }
 
         private void cleanup() {
@@ -228,6 +305,12 @@ public class MainActivity extends Activity {
             recorder.stop();
             recorder.release();
             recorder = null;
+
+            try {
+                out.close();
+            } catch(IOException e) {
+                throw new RuntimeException("can't close output stream", e);
+            }
         }
 
         @Override
