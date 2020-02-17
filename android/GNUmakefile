@@ -1,19 +1,20 @@
 GRADLE ?= gradle
+GRADLE_OPTS ?= --warning-mode=none --console=plain
 export ANDROID_SDK_ROOT ?= $(shell pwd)/sdk
 export ANDROID_HOME = $(ANDROID_SDK_ROOT)
 ANDROID_SDK_BIN=$(ANDROID_SDK_ROOT)/tools/bin
 
 build: $(ANDROID_SDK_ROOT)
-	$(GRADLE) build
+	@$(GRADLE) $(GRADLE_OPTS) build
 
 install: $(ANDROID_SDK_ROOT)
-	$(GRADLE) installDebug
+	@$(GRADLE) $(GRADLE_OPTS) installDebug
 
 $(ANDROID_SDK_ROOT):
 	./sdk.sh "$@"
 
 clean:
-	$(GRADLE) clean
+	@$(GRADLE) $(GRADLE_OPTS) clean
 
 logs:
 	adb logcat AudioJournal:D *:S
