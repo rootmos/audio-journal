@@ -7,11 +7,13 @@ import java.util.Arrays;
 import android.Manifest;
 import android.app.Activity;
 import android.os.Bundle;
+import android.os.AsyncTask;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
 import android.media.AudioRecord;
+import android.media.AudioFormat;
 import android.content.pm.PackageManager;
 
 import androidx.core.app.ActivityCompat;
@@ -42,7 +44,7 @@ public class MainActivity extends Activity {
 
     private Set<String> granted_permissions = new HashSet<>();
 
-    private AudioRecord recorder = null;
+    private RecordTask recorder = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -116,8 +118,8 @@ public class MainActivity extends Activity {
             return;
         }
 
-        recorder = new AudioRecord.Builder().build();
-        recorder.startRecording();
+        recorder = new RecordTask();
+        recorder.execute();
 
         state = State.RECORDING;
         status_text.setText("Recording!");
@@ -133,7 +135,7 @@ public class MainActivity extends Activity {
             return;
         }
 
-        recorder.stop();
+        recorder.cancel(false);
 
         state = State.IDLE;
         status_text.setText("Not recording");
@@ -151,5 +153,96 @@ public class MainActivity extends Activity {
 
         state = State.IDLE;
         Log.i(TAG, "state transition: playing -> idle");
+    }
+
+    private class RecordTask extends AsyncTask<Void, Float, Boolean> {
+        private AudioRecord recorder = null;
+
+        @Override
+        protected void onPreExecute() {
+            int sampleRate = 44100;
+
+            int minBufSize = AudioRecord.getMinBufferSize(sampleRate,
+                    AudioFormat.CHANNEL_IN_STEREO,
+                    AudioFormat.ENCODING_PCM_FLOAT);
+            Log.d(TAG, "recommended minimum buffer size: " + minBufSize);
+
+            int bufSize = Math.max(1810432, minBufSize);
+
+            while(true) {
+                recorder = new AudioRecord.Builder()
+                    .setAudioFormat(new AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
+                            .build())
+                    .setBufferSizeInBytes(bufSize)
+                    .build();
+
+                // ensure 1 seconds of audio fits in the buffer
+                if(recorder.getBufferSizeInFrames() >=
+                        recorder.getChannelCount() *
+                        recorder.getSampleRate()) {
+                    break;
+                } else {
+                    recorder.release();
+                    recorder = null;
+                    bufSize *= 2;
+                    Log.d(TAG, "buffer too small, trying: " + bufSize);
+                }
+            }
+
+            Log.d(TAG, "configured sample rate: " + recorder.getSampleRate());
+            Log.d(TAG, "configured buffer size in frames: " + recorder.getBufferSizeInFrames());
+
+            recorder.startRecording();
+        }
+
+        @Override
+        protected Boolean doInBackground(Void... params) {
+            final int channels = recorder.getChannelCount();
+            final int sampleRate = recorder.getSampleRate();
+
+            // TODO: make the chunk size configurable
+            float seconds = 0;
+            float[] samples = new float[1024*channels];
+            while(true) {
+                if(isCancelled()) {
+                    return Boolean.TRUE;
+                }
+
+                int r = recorder.read(samples, 0, samples.length,
+                        AudioRecord.READ_BLOCKING);
+                if(r < 0) {
+                    Log.e(TAG, "audio recording failed: " + r);
+                    return Boolean.FALSE;
+                }
+                Log.d(TAG, String.format("read %d samples of audio", r));
+                seconds += (float)r / (channels * sampleRate);
+                publishProgress(seconds);
+            }
+        }
+
+        private void cleanup() {
+            Log.e(TAG, "releasing audio recorder");
+            recorder.stop();
+            recorder.release();
+            recorder = null;
+        }
+
+        @Override
+        protected void onCancelled() {
+            cleanup();
+        }
+
+        @Override
+        protected void onPostExecute(Boolean res) {
+            cleanup();
+        }
+
+        @Override
+        protected void onProgressUpdate(Float... values) {
+            status_text.setText(String.format("Recording: %.2fs", values[0]));
+        }
     }
 }

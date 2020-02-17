@@ -15,6 +15,9 @@ $(ANDROID_SDK_ROOT):
 clean:
 	$(GRADLE) clean
 
+logs:
+	adb logcat AudioJournal:D *:S
+
 AVD=audio-journal-avd
 AVD_ROOT=$(ANDROID_SDK_ROOT)/avd
 SDK_ID=system-images;android-28;default;x86_64
@@ -27,4 +30,4 @@ run-emulator:
 	$(ANDROID_SDK_ROOT)/tools/emulator -avd $(AVD)
 
 .PHONY: build clean
-.PHONY: prepare-emulator run-emulator
+.PHONY: logs prepare-emulator run-emulator
