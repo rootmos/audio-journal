@@ -12,18 +12,21 @@ import java.util.Set;
 
 import android.Manifest;
 import android.app.Activity;
-import android.os.Bundle;
+import android.content.pm.PackageManager;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaPlayer;
 import android.os.AsyncTask;
+import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
-import android.widget.TextView;
-import android.widget.ListView;
 import android.widget.BaseAdapter;
-import android.media.AudioRecord;
-import android.media.AudioFormat;
-import android.content.pm.PackageManager;
+import android.widget.Button;
+import android.widget.ImageButton;
+import android.widget.ListView;
+import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.core.app.ActivityCompat;
 
@@ -64,10 +67,10 @@ public class MainActivity extends Activity {
     private Button stop_button = null;
 
     private SoundsAdapter sa = new SoundsAdapter();
+    private RecordTask recorder = null;
+    private SoundItem active_sound = null;
 
     private Set<String> granted_permissions = new HashSet<>();
-
-    private RecordTask recorder = null;
 
     private AmazonS3Client s3 = null;
 
@@ -183,11 +186,37 @@ public class MainActivity extends Activity {
         Log.i(TAG, "state: recording -> idle");
     }
 
+    private void play_sound(SoundItem s) {
+        if(state == State.RECORDING) {
+            Toast.makeText(this,
+                    "Stop recording to start playing",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if(state == State.PLAYING) {
+            stop_playing();
+        }
+
+        if(state != State.IDLE) {
+            Log.e(TAG, "trying to start playing in non-idle state");
+            return;
+        }
+
+        active_sound = s;
+        active_sound.play();
+        state = State.PLAYING;
+
+        Log.i(TAG, "state: ... -> playing");
+    }
+
     private void stop_playing() {
         if(state != State.PLAYING) {
             Log.e(TAG, "trying to stop playing in non-playing state");
             return;
         }
+
+        active_sound.stop();
 
         state = State.IDLE;
         Log.i(TAG, "state transition: playing -> idle");
@@ -376,16 +405,132 @@ public class MainActivity extends Activity {
         }
     }
 
+    private class SoundItem implements View.OnClickListener {
+        private View v = null;
+        private Sound s = null;
+
+        private ImageButton play = null;
+        private ImageButton resume = null;
+        private ImageButton pause = null;
+        private ImageButton stop = null;
+        private MediaPlayer player = null;
+
+        public SoundItem(Sound s) {
+            this.s = s;
+        }
+
+        public Sound getSound() { return s; }
+
+        @Override
+        public void onClick(View w) {
+            if(w == play) {
+                play_sound(this);
+            } else {
+                if(active_sound != this) {
+                    Log.w(TAG, "click on inactive sound");
+                    return;
+                }
+
+                if(w == pause) {
+                    Log.i(TAG, "pausing: " + s.getURL());
+                    player.pause();
+                    pause.setVisibility(View.GONE);
+                    resume.setVisibility(View.VISIBLE);
+                } else if(w == resume) {
+                    Log.i(TAG, "resuming: " + s.getURL());
+                    player.start();
+                    pause.setVisibility(View.VISIBLE);
+                    resume.setVisibility(View.GONE);
+                } else if(w == stop) {
+                    stop_playing();
+                } else {
+                    Log.w(TAG, "unexpected click");
+                }
+            }
+        }
+
+        public View getView(ViewGroup vg) {
+            if(v != null) return v;
+            v = getLayoutInflater().inflate(R.layout.sounds_item, vg, false);
+
+            play = (ImageButton)v.findViewById(R.id.play);
+            play.setOnClickListener(this);
+
+            pause = (ImageButton)v.findViewById(R.id.pause);
+            pause.setOnClickListener(this);
+
+            resume = (ImageButton)v.findViewById(R.id.resume);
+            resume.setOnClickListener(this);
+
+            stop = (ImageButton)v.findViewById(R.id.stop);
+            stop.setOnClickListener(this);
+
+            ((TextView)v.findViewById(R.id.title)).setText(s.getTitle());
+
+            return v;
+        }
+
+        public void play() {
+            player = new MediaPlayer();
+            try {
+                player.setDataSource(s.getURL());
+            } catch(IOException e) {
+                Log.e(TAG, "unable to play: " + s.getURL(), e);
+                return;
+            }
+
+            player.setOnPreparedListener(
+                new MediaPlayer.OnPreparedListener() {
+                    public void onPrepared(MediaPlayer m) {
+                        if(player != m) {
+                            Log.w(TAG, "finished preparing an unwanted sound: " +
+                                    s.getURL());
+                            return;
+                        }
+
+                        m.start();
+
+                        play.setVisibility(View.GONE);
+                        pause.setVisibility(View.VISIBLE);
+                        resume.setVisibility(View.GONE);
+                        stop.setVisibility(View.VISIBLE);
+
+                        Log.i(TAG, "playing: " + s.getURL());
+                    }
+                }
+            );
+
+            play.setEnabled(false);
+            player.prepareAsync();
+            Log.i(TAG, "preparing: " + s.getURL());
+        }
+
+        public void stop() {
+            Log.i(TAG, "stopping: " + s.getURL());
+            if(player.isPlaying()) player.stop();
+            player.release();
+            player = null;
+
+            play.setEnabled(true);
+            play.setVisibility(View.VISIBLE);
+            pause.setVisibility(View.GONE);
+            resume.setVisibility(View.GONE);
+            stop.setVisibility(View.GONE);
+        }
+    }
+
     private class SoundsAdapter extends BaseAdapter {
-        ArrayList<Sound> ss = new ArrayList<>();
+        ArrayList<SoundItem> ss = new ArrayList<>();
 
         public void addSounds(Sound[] ss) {
-            for(Sound s : ss) this.ss.add(s);
+            for(Sound s : ss) this.ss.add(new SoundItem(s));
             notifyDataSetChanged();
         }
 
         @Override
-        public long getItemId(int i) { return ss.get(i).getSHA1().hashCode(); }
+        public long getItemId(int i) {
+            return ss.get(i).getSound().hashCode();
+        }
 
         @Override
         public Object getItem(int i) { return ss.get(i); }
@@ -394,16 +539,8 @@ public class MainActivity extends Activity {
         public int getCount() { return ss.size(); }
 
         @Override
-        public View getView(int i, View v, ViewGroup c) {
-            if (v == null) {
-                v = getLayoutInflater().inflate(R.layout.sounds_item, c, false);
-            }
-
-            Sound s = ss.get(i);
-
-            ((TextView)v.findViewById(R.id.title)).setText(s.getTitle());
-
-            return v;
+        public View getView(int i, View v, ViewGroup vg) {
+            return ss.get(i).getView(vg);
         }
     }
 }
