@@ -20,4 +20,6 @@ android {
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.1.0'
     implementation 'net.sourceforge.javaflacencoder:java-flac-encoder:0.3.7'
+    implementation 'com.amazonaws:aws-android-sdk-s3:2.16.8'
+    implementation 'commons-codec:commons-codec:1.14'
 }

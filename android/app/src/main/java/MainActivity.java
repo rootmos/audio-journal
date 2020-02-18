@@ -2,11 +2,13 @@ package io.rootmos.audiojournal;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.Set;
-import java.util.HashSet;
-import java.util.Arrays;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 import android.Manifest;
 import android.app.Activity;
@@ -14,8 +16,11 @@ import android.os.Bundle;
 import android.os.AsyncTask;
 import android.util.Log;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.TextView;
+import android.widget.ListView;
+import android.widget.BaseAdapter;
 import android.media.AudioRecord;
 import android.media.AudioFormat;
 import android.content.pm.PackageManager;
@@ -26,6 +31,13 @@ import net.sourceforge.javaflacencoder.FLACEncoder;
 import net.sourceforge.javaflacencoder.FLACFileOutputStream;
 import net.sourceforge.javaflacencoder.StreamConfiguration;
 import net.sourceforge.javaflacencoder.EncodingConfiguration;
+
+import com.amazonaws.auth.AWSCredentials;
+import com.amazonaws.regions.Region;
+import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.model.ObjectListing;
+import com.amazonaws.services.s3.model.S3Object;
+import com.amazonaws.services.s3.model.S3ObjectSummary;
 
 public class MainActivity extends Activity {
     private static final String TAG = "AudioJournal";
@@ -51,9 +63,13 @@ public class MainActivity extends Activity {
     private Button start_button = null;
     private Button stop_button = null;
 
+    private SoundsAdapter sa = new SoundsAdapter();
+
     private Set<String> granted_permissions = new HashSet<>();
 
     private RecordTask recorder = null;
+
+    private AmazonS3Client s3 = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,6 +78,8 @@ public class MainActivity extends Activity {
         status_text = (TextView)findViewById(R.id.status);
         start_button = (Button)findViewById(R.id.start);
         stop_button = (Button)findViewById(R.id.stop);
+
+        ((ListView)findViewById(R.id.sounds)).setAdapter(sa);
 
         Log.d(TAG, "creating main activity");
 
@@ -76,6 +94,11 @@ public class MainActivity extends Activity {
                 stop_recording();
             }
         });
+
+        Region r = Region.getRegion("eu-central-1");
+        s3 = new AmazonS3Client(AWSAuth.getAuth(), r);
+
+        new ListSoundsTask().execute();
     }
 
     private boolean ensurePermissionGranted(
@@ -326,6 +349,61 @@ public class MainActivity extends Activity {
         @Override
         protected void onProgressUpdate(Float... values) {
             status_text.setText(String.format("Recording: %.2fs", values[0]));
+        }
+    }
+
+    private class ListSoundsTask extends AsyncTask<Void, Sound, List<Sound>> {
+        @Override
+        protected List<Sound> doInBackground(Void... params) {
+            List<S3ObjectSummary> ol =
+                s3.listObjects("rootmos-sounds").getObjectSummaries();
+            ArrayList<Sound> ss = new ArrayList<>(ol.size());
+            for(S3ObjectSummary os : ol) {
+                S3Object o = s3.getObject(os.getBucketName(), os.getKey());
+                String ct = o.getObjectMetadata().getContentType();
+                if(ct.equals("application/json")) {
+                    Sound s = Sound.fromInputStream(o.getObjectContent());
+                    ss.add(s);
+                    publishProgress(s);
+                }
+            }
+            return ss;
+        }
+
+        @Override
+        protected void onProgressUpdate(Sound... sounds) {
+            sa.addSounds(sounds);
+        }
+    }
+
+    private class SoundsAdapter extends BaseAdapter {
+        ArrayList<Sound> ss = new ArrayList<>();
+
+        public void addSounds(Sound[] ss) {
+            for(Sound s : ss) this.ss.add(s);
+            notifyDataSetChanged();
+        }
+
+        @Override
+        public long getItemId(int i) { return ss.get(i).getSHA1().hashCode(); }
+
+        @Override
+        public Object getItem(int i) { return ss.get(i); }
+
+        @Override
+        public int getCount() { return ss.size(); }
+
+        @Override
+        public View getView(int i, View v, ViewGroup c) {
+            if (v == null) {
+                v = getLayoutInflater().inflate(R.layout.sounds_item, c, false);
+            }
+
+            Sound s = ss.get(i);
+
+            ((TextView)v.findViewById(R.id.title)).setText(s.getTitle());
+
+            return v;
         }
     }
 }

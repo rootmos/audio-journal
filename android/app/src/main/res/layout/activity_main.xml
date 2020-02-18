@@ -23,4 +23,8 @@
         android:text="Stop"
         android:enabled="false" />
 
+    <ListView android:id="@+id/sounds"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content" />
+
 </LinearLayout>
