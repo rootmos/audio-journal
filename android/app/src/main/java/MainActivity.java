@@ -9,6 +9,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import android.Manifest;
 import android.app.Activity;
@@ -188,7 +189,7 @@ public class MainActivity extends Activity {
             return;
         }
 
-        recorder.cancel(false);
+        recorder.stop();
 
         state = State.IDLE;
         status_text.setText("Not recording");
@@ -242,11 +243,14 @@ public class MainActivity extends Activity {
         private File path = null;
         private MetadataTemplate template = null;
         private OffsetDateTime time = null;
+        private AtomicBoolean stopping = new AtomicBoolean(false);
 
         public RecordTask(File baseDir, MetadataTemplate template) {
             this.baseDir = baseDir;
             this.template = template;
         };
+
+        public void stop() { stopping.set(true); }
 
         @Override
         protected void onPreExecute() {
@@ -327,7 +331,7 @@ public class MainActivity extends Activity {
             // TODO: make the chunk size configurable
             float seconds = 0;
             short[] samples = new short[1024*channels];
-            while(!isCancelled()) {
+            while(!stopping.get()) {
                 int r = recorder.read(samples, 0, samples.length,
                         AudioRecord.READ_BLOCKING);
                 if(r < 0) {
@@ -382,11 +386,6 @@ public class MainActivity extends Activity {
             } catch(IOException e) {
                 throw new RuntimeException("can't close output stream", e);
             }
-        }
-
-        @Override
-        protected void onCancelled(Sound s) {
-            sa.addSounds(s);
         }
 
         @Override
