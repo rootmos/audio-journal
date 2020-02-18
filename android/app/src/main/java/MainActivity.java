@@ -13,6 +13,7 @@ import java.util.Set;
 import android.Manifest;
 import android.app.Activity;
 import android.content.pm.PackageManager;
+import android.content.Context;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaPlayer;
@@ -139,6 +140,18 @@ public class MainActivity extends Activity {
         }
     }
 
+    private File getBaseDir() {
+        File[] rs = getExternalMediaDirs();
+        if(rs.length == 0) {
+            throw new RuntimeException("no media dirs");
+        }
+        return rs[0];
+    }
+
+    private File getTakesDir() {
+        return new File(getBaseDir(), "takes");
+    }
+
     private void start_recording() {
         if(state == State.RECORDING) {
             Log.e(TAG, "illegal state transition: recording -> recording");
@@ -153,13 +166,12 @@ public class MainActivity extends Activity {
             return;
         }
 
+        MetadataTemplate template = new MetadataTemplate(
+                "Session @ %t", "rootmos", "Gustav Behm");
+        template.setTargetDir(new File(getBaseDir(), "sessions"));
+        template.setFilename("%t.flac");
 
-        File[] rs = getExternalMediaDirs();
-        if(rs.length == 0) {
-            throw new RuntimeException("no media dirs");
-        }
-
-        recorder = new RecordTask(rs[0]);
+        recorder = new RecordTask(getTakesDir(), template);
         recorder.execute();
 
         state = State.RECORDING;
@@ -204,7 +216,7 @@ public class MainActivity extends Activity {
         }
 
         active_sound = s;
-        active_sound.play();
+        active_sound.play(this);
         state = State.PLAYING;
 
         Log.i(TAG, "state: ... -> playing");
@@ -222,14 +234,18 @@ public class MainActivity extends Activity {
         Log.i(TAG, "state transition: playing -> idle");
     }
 
-    private class RecordTask extends AsyncTask<Void, Float, Boolean> {
+    private class RecordTask extends AsyncTask<Void, Float, Sound> {
         private AudioRecord recorder = null;
         private FLACEncoder encoder = null;
         private File baseDir = null;
         private FLACFileOutputStream out = null;
+        private File path = null;
+        private MetadataTemplate template = null;
+        private OffsetDateTime time = null;
 
-        public RecordTask(File baseDir) {
+        public RecordTask(File baseDir, MetadataTemplate template) {
             this.baseDir = baseDir;
+            this.template = template;
         };
 
         @Override
@@ -241,7 +257,7 @@ public class MainActivity extends Activity {
                     AudioFormat.ENCODING_PCM_16BIT);
             Log.d(TAG, "recommended minimum buffer size: " + minBufSize);
 
-            int bufSize = Math.max(122880, minBufSize);
+            int bufSize = Math.max(491520, minBufSize);
 
             while(true) {
                 recorder = new AudioRecord.Builder()
@@ -281,12 +297,14 @@ public class MainActivity extends Activity {
             ec.setSubframeType(EncodingConfiguration.SubframeType.EXHAUSTIVE);
             encoder.setEncodingConfiguration(ec);
 
-            OffsetDateTime time = OffsetDateTime.now();
+            time = OffsetDateTime.now();
 
             String fn = time.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
                 + ".flac";
-            File path = new File(baseDir, fn);
+            path = new File(baseDir, fn);
             try {
+                baseDir.mkdirs();
+
                 out = new FLACFileOutputStream(path);
                 if(!out.isValid()) {
                     throw new RuntimeException("can't open output stream");
@@ -302,7 +320,7 @@ public class MainActivity extends Activity {
         }
 
         @Override
-        protected Boolean doInBackground(Void... params) {
+        protected Sound doInBackground(Void... params) {
             final int channels = recorder.getChannelCount();
             final int sampleRate = recorder.getSampleRate();
 
@@ -313,8 +331,7 @@ public class MainActivity extends Activity {
                 int r = recorder.read(samples, 0, samples.length,
                         AudioRecord.READ_BLOCKING);
                 if(r < 0) {
-                    Log.e(TAG, "audio recording failed: " + r);
-                    return Boolean.FALSE;
+                    throw new RuntimeException("audio recording falied: " + r);
                 }
                 Log.d(TAG, String.format("read %d samples of audio", r));
 
@@ -349,7 +366,9 @@ public class MainActivity extends Activity {
                 throw new RuntimeException("can't encode samples", e);
             }
 
-            return Boolean.TRUE;
+            cleanup();
+
+            return template.renderLocalFile(path, time, seconds);
         }
 
         private void cleanup() {
@@ -366,13 +385,13 @@ public class MainActivity extends Activity {
         }
 
         @Override
-        protected void onCancelled() {
-            cleanup();
+        protected void onCancelled(Sound s) {
+            sa.addSounds(s);
         }
 
         @Override
-        protected void onPostExecute(Boolean res) {
-            cleanup();
+        protected void onPostExecute(Sound s) {
+            sa.addSounds(s);
         }
 
         @Override
@@ -432,12 +451,12 @@ public class MainActivity extends Activity {
                 }
 
                 if(w == pause) {
-                    Log.i(TAG, "pausing: " + s.getURL());
+                    Log.i(TAG, "pausing: " + s.getURI());
                     player.pause();
                     pause.setVisibility(View.GONE);
                     resume.setVisibility(View.VISIBLE);
                 } else if(w == resume) {
-                    Log.i(TAG, "resuming: " + s.getURL());
+                    Log.i(TAG, "resuming: " + s.getURI());
                     player.start();
                     pause.setVisibility(View.VISIBLE);
                     resume.setVisibility(View.GONE);
@@ -470,12 +489,12 @@ public class MainActivity extends Activity {
             return v;
         }
 
-        public void play() {
+        public void play(Context ctx) {
             player = new MediaPlayer();
             try {
-                player.setDataSource(s.getURL());
+                player.setDataSource(ctx, s.getURI());
             } catch(IOException e) {
-                Log.e(TAG, "unable to play: " + s.getURL(), e);
+                Log.e(TAG, "unable to play: " + s.getURI(), e);
                 return;
             }
 
@@ -484,7 +503,7 @@ public class MainActivity extends Activity {
                     public void onPrepared(MediaPlayer m) {
                         if(player != m) {
                             Log.w(TAG, "finished preparing an unwanted sound: " +
-                                    s.getURL());
+                                    s.getURI());
                             return;
                         }
 
@@ -495,18 +514,18 @@ public class MainActivity extends Activity {
                         resume.setVisibility(View.GONE);
                         stop.setVisibility(View.VISIBLE);
 
-                        Log.i(TAG, "playing: " + s.getURL());
+                        Log.i(TAG, "playing: " + s.getURI());
                     }
                 }
             );
 
             play.setEnabled(false);
             player.prepareAsync();
-            Log.i(TAG, "preparing: " + s.getURL());
+            Log.i(TAG, "preparing: " + s.getURI());
         }
 
         public void stop() {
-            Log.i(TAG, "stopping: " + s.getURL());
+            Log.i(TAG, "stopping: " + s.getURI());
             if(player.isPlaying()) player.stop();
             player.release();
             player = null;
@@ -522,7 +541,7 @@ public class MainActivity extends Activity {
     private class SoundsAdapter extends BaseAdapter {
         ArrayList<SoundItem> ss = new ArrayList<>();
 
-        public void addSounds(Sound[] ss) {
+        public void addSounds(Sound... ss) {
             for(Sound s : ss) this.ss.add(new SoundItem(s));
             notifyDataSetChanged();
         }
