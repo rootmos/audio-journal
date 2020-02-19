@@ -3,7 +3,9 @@ package io.rootmos.audiojournal;
 import static io.rootmos.audiojournal.Common.TAG;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.FileNotFoundException;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -45,6 +47,7 @@ import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
+import com.amazonaws.services.s3.model.GetObjectRequest;
 
 public class MainActivity extends Activity {
     private enum Continuation {
@@ -406,18 +409,41 @@ public class MainActivity extends Activity {
     }
 
     private class ListSoundsTask extends AsyncTask<Void, Sound, List<Sound>> {
+        File cache = null;
+
+        @Override
+        protected void onPreExecute() {
+            cache = new File(getCacheDir(), "upstream");
+            cache.mkdirs();
+        }
+
         @Override
         protected List<Sound> doInBackground(Void... params) {
             List<S3ObjectSummary> ol =
                 s3.listObjects("rootmos-sounds").getObjectSummaries();
             ArrayList<Sound> ss = new ArrayList<>(ol.size());
             for(S3ObjectSummary os : ol) {
-                S3Object o = s3.getObject(os.getBucketName(), os.getKey());
-                String ct = o.getObjectMetadata().getContentType();
-                if(ct.equals("application/json")) {
-                    Sound s = Sound.fromInputStream(o.getObjectContent());
+                if(!os.getKey().endsWith(".json")) continue;
+
+                File f = new File(cache, os.getETag());
+                if(!f.exists()) {
+                    Log.d(TAG, String.format(
+                                "fetching metadata: s3://%s/%s etag=%s",
+                                os.getBucketName(), os.getKey(), os.getETag()));
+                    s3.getObject(new GetObjectRequest(
+                                os.getBucketName(), os.getKey()), f);
+                } else {
+                    Log.d(TAG, String.format(
+                                "using cached metadata: s3://%s/%s etag=%s",
+                                os.getBucketName(), os.getKey(), os.getETag()));
+                }
+
+                try {
+                    Sound s = Sound.fromInputStream(new FileInputStream(f));
                     ss.add(s);
                     publishProgress(s);
+                } catch(FileNotFoundException e) {
+                    throw new RuntimeException("unable to open file", e);
                 }
             }
             return ss;
