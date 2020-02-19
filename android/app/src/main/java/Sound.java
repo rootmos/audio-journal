@@ -21,6 +21,7 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import org.json.JSONTokener;
@@ -97,6 +98,17 @@ class Sound implements Comparable<Sound> {
         } else {
             return date.isBefore(o.date) ?  -1 : 1;
         }
+    }
+
+    public void merge(Sound o) {
+        if(!Arrays.equals(sha1, o.sha1)) {
+            throw new RuntimeException("merging sounds with different hashes");
+        }
+
+        if(o.filename != null) filename = o.filename;
+        if(o.local != null) local = o.local;
+        if(o.uri != null) uri = o.uri;
+        if(o.metadata != null) metadata = o.metadata;
     }
 
     static public List<Sound> scanDir(File d) {

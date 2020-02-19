@@ -687,6 +687,16 @@ public class MainActivity extends Activity {
         public void uploaded() {
             upload.setVisibility(View.GONE);
         }
+
+        public void merge(Sound o) {
+            s.merge(o);
+
+            if(s.getURI() == null && s.getLocal() != null) {
+                upload.setVisibility(View.VISIBLE);
+            } else {
+                upload.setVisibility(View.GONE);
+            }
+        }
     }
 
     private class SoundsAdapter extends BaseAdapter {
@@ -694,19 +704,17 @@ public class MainActivity extends Activity {
 
         public void addSounds(Context ctx, Sound... sounds) {
             for(Sound s : sounds) {
-                Sound t = null;
+                SoundItem t = null;
                 for(SoundItem i : ss) {
                     if(Arrays.equals(i.getSound().getSHA1(), s.getSHA1())) {
-                        t = i.getSound();
+                        t = i;
                         break;
                     }
                 }
                 if(t == null) {
                     ss.add(new SoundItem(ctx, s));
                 } else {
-                    // TODO: merge sounds
-                    Log.w(TAG, "duplicate sound detected: " + s.getTitle());
-                    ss.add(new SoundItem(ctx, s));
+                    t.merge(s);
                 }
             }
 
