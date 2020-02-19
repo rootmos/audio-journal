@@ -6,7 +6,7 @@ TMP=$(mktemp -d)
 trap 'rm -rf $TMP' EXIT
 
 ACTION=record
-MODE=release
+MODE=sessions
 TITLE=
 PRE_FILTERS="norm"
 POST_FILTERS="norm"
@@ -14,13 +14,15 @@ AUDIO_JOURNAL=${AUDIO_JOURNAL-$HOME/audio-journal}
 SUFFIX=${AUDIO_JOURNAL_SUFFIX-.mp3}
 PLAYER=${PLAYER-mpv}
 BUCKET=${AUDIO_JOURNAL_BUCKET-rootmos-sounds}
-while getopts "pRrlLPm:t:" OPT; do
+BUCKET_REGION=${AUDIO_JOURNAL_BUCKET_REGION-eu-central-1}
+while getopts "psRrlLPm:t:" OPT; do
     case $OPT in
         r) ACTION=record ;;
         l) ACTION=listen ;;
         L) ACTION=list ;;
         P) ACTION=publish ;;
         p) MODE=practice ;;
+        s) MODE=sessions ;;
         R) MODE=release ;;
         m) MODE=$OPTARG ;;
         t) TITLE=$OPTARG ;;
@@ -55,7 +57,8 @@ upload() {
 }
 
 url() {
-    echo "https://$BUCKET.ams3.cdn.digitaloceanspaces.com/$PREFIX$1"
+    ENC=$(sed 's/:/%3A/g' <<< "$1" | sed 's/+/%2B/g')
+    echo "https://$BUCKET.s3.$BUCKET_REGION.amazonaws.com/$PREFIX$ENC"
 }
 
 tag() {
@@ -153,7 +156,7 @@ list() {
     export -f url
     s3cmd ls -l "s3://$BUCKET/$PREFIX" \
         | awk '{ print $6 }' \
-        | grep "$SUFFIX$" \
+        | grep -v ".json$" \
         | sort -r | while read -r f; do
         url "$(basename "$f")"
     done
@@ -183,11 +186,10 @@ record() {
             RAW=$TAKES_DIR/$DATE.raw.flac
             PRE=$TMP/$DATE.pre.flac
             ;;
-        practice)
+        *)
             RAW=$TMP/$DATE.raw.flac
             PRE=$TMP/$DATE.pre.flac
             ;;
-        *) echo "Unsupported mode: $MODE" >&2; exit 2;;
     esac
 
     clear
