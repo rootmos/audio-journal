@@ -1,15 +1,27 @@
 package io.rootmos.audiojournal;
 
+import static io.rootmos.audiojournal.Common.TAG;
+
 import android.net.Uri;
+import android.util.Log;
 
 import java.io.File;
-import java.io.InputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.json.JSONTokener;
 import org.json.JSONObject;
@@ -24,6 +36,7 @@ class Sound implements Comparable<Sound> {
     private String artist = null;
     private String composer = null;
     private float duration = 0;
+    private String filename = null;
 
     private Uri uri = null;
     private File local = null;
@@ -43,10 +56,6 @@ class Sound implements Comparable<Sound> {
     public void setDateTime(OffsetDateTime dt) {
         datetime = dt;
         date = dt.toLocalDate();
-    }
-
-    public void setURI(Uri uri) {
-        this.uri = uri;
     }
 
     public void setLocal(File path) {
@@ -83,6 +92,36 @@ class Sound implements Comparable<Sound> {
         }
     }
 
+    static public List<Sound> scanDir(File d) {
+        final ArrayList<Sound> ss = new ArrayList<>();
+        try {
+            Files.walkFileTree(d.toPath(),
+                new SimpleFileVisitor<Path>() {
+                    @Override
+                    public FileVisitResult visitFile(Path p,
+                            BasicFileAttributes attrs) throws IOException {
+                        Log.d(TAG, "considering: " + p);
+                        if(p.toFile().getName().endsWith(".json")) {
+                            ss.add(fromLocalFile(p.toFile()));
+                        }
+                        return FileVisitResult.CONTINUE;
+                    }
+                });
+        } catch(IOException e) {
+            Log.e(TAG, "exception while scanning: " + d, e);
+            return null;
+        }
+        return ss;
+    }
+
+    static public Sound fromLocalFile(File m) throws FileNotFoundException {
+        Log.d(TAG, "reading local metadata: " + m);
+        Sound s = fromInputStream(new FileInputStream(m));
+        File p = new File(m.getParent(), s.filename);
+        if(p.exists()) s.local = p;
+        return s;
+    }
+
     static public Sound fromInputStream(InputStream is) {
         String raw = null;
         try {
@@ -113,7 +152,8 @@ class Sound implements Comparable<Sound> {
             byte[] sha1 = Hex.decodeHex(j.getString("sha1"));
 
             s = new Sound(t, a, c, sha1, d);
-            s.setURI(Uri.parse(j.getString("url")));
+            s.uri = Uri.parse(j.getString("url"));
+            s.filename = j.getString("filename");
         } catch(DecoderException e) {
             throw new RuntimeException("unable to hex decode", e);
         } catch(JSONException e) {
@@ -141,7 +181,11 @@ class Sound implements Comparable<Sound> {
             j.put("title", title);
             j.put("sha1", Hex.encodeHexString(sha1));
             j.put("url", JSONObject.NULL);
-            if(local != null) j.put("filename", local.getName());
+            if(local != null) {
+                j.put("filename", local.getName());
+            } else if(filename != null) {
+                j.put("filename", filename);
+            }
             j.put("artist", artist);
             j.put("composer", composer);
             if(datetime != null) {

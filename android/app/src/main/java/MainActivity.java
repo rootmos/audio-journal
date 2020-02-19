@@ -422,9 +422,15 @@ public class MainActivity extends Activity {
 
         @Override
         protected List<Sound> doInBackground(Void... params) {
+            ArrayList<Sound> ss = new ArrayList<>();
+
+            for(Sound s : Sound.scanDir(getBaseDir())) {
+                ss.add(s);
+                publishProgress(s);
+            }
+
             List<S3ObjectSummary> ol =
                 s3.listObjects("rootmos-sounds").getObjectSummaries();
-            ArrayList<Sound> ss = new ArrayList<>(ol.size());
             for(S3ObjectSummary os : ol) {
                 if(!os.getKey().endsWith(".json")) continue;
 
