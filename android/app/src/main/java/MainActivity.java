@@ -1,5 +1,7 @@
 package io.rootmos.audiojournal;
 
+import static io.rootmos.audiojournal.Common.TAG;
+
 import java.io.File;
 import java.io.IOException;
 import java.time.OffsetDateTime;
@@ -45,8 +47,6 @@ import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 
 public class MainActivity extends Activity {
-    private static final String TAG = "AudioJournal";
-
     private enum Continuation {
         RECORD(815468);
 
@@ -370,12 +370,6 @@ public class MainActivity extends Activity {
                 throw new RuntimeException("can't encode samples", e);
             }
 
-            cleanup();
-
-            return template.renderLocalFile(path, time, seconds);
-        }
-
-        private void cleanup() {
             Log.e(TAG, "releasing audio recorder");
             recorder.stop();
             recorder.release();
@@ -386,6 +380,11 @@ public class MainActivity extends Activity {
             } catch(IOException e) {
                 throw new RuntimeException("can't close output stream", e);
             }
+
+            Log.i(TAG, String.format("finished recording (%.2fs): %s",
+                        seconds, path));
+
+            return template.renderLocalFile(path, time, seconds);
         }
 
         @Override

@@ -1,6 +1,9 @@
 package io.rootmos.audiojournal;
 
+import static io.rootmos.audiojournal.Common.TAG;
+
 import android.net.Uri;
+import android.util.Log;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -57,6 +60,8 @@ class MetadataTemplate {
 
                 dir.mkdirs();
 
+                Log.i(TAG, String.format("copying: %s -> %s", path, dest));
+
                 path = Files.copy(path.toPath(), dest.toPath()).toFile();
             }
 
@@ -64,6 +69,7 @@ class MetadataTemplate {
                 .digest(path);
 
             String title = renderString(this.title, time, length);
+            Log.d(TAG, String.format("rendered title: %s", title));
 
             AudioFile af = AudioFileIO.read(path);
             Tag t = af.getTag();
@@ -73,6 +79,7 @@ class MetadataTemplate {
             t.setField(FieldKey.YEAR,
                     time.format(DateTimeFormatter.ofPattern("%y")));
             af.commit();
+            Log.d(TAG, String.format("tagged: %s", path));
 
             return new Sound(title, sha1, Uri.fromFile(path));
         } catch(Exception e) {

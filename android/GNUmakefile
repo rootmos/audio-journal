@@ -17,7 +17,7 @@ clean:
 	@$(GRADLE) $(GRADLE_OPTS) clean
 
 logs:
-	adb logcat AudioJournal:D *:S
+	adb logcat AudioJournal:D AndroidRuntime:E *:S
 
 AVD=audio-journal-avd
 AVD_ROOT=$(ANDROID_SDK_ROOT)/avd
