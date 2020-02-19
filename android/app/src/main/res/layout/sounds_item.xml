@@ -130,6 +130,14 @@
             android:contentDescription="@string/stop"
             android:src="@drawable/stop"
             android:visibility="gone" />
+
+        <ImageButton
+            android:id="@+id/upload"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/upload"
+            android:src="@drawable/upload"
+            android:visibility="gone" />
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

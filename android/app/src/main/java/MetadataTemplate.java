@@ -28,16 +28,13 @@ class MetadataTemplate {
     private String filename = null;
 
     private String suffix = null;
-    private String prefix = null;
 
     public MetadataTemplate(
-            String title, String artist, String composer,
-            String prefix, String suffix) {
+            String title, String artist, String composer, String suffix) {
         this.title = title;
         this.artist = artist;
         this.composer = composer;
         this.suffix = suffix;
-        this.prefix = prefix;
     }
 
     public void setTargetDir(File dir) { this.dir = dir; }

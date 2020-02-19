@@ -40,6 +40,7 @@ class Sound implements Comparable<Sound> {
 
     private Uri uri = null;
     private File local = null;
+    private File metadata = null;
 
     private OffsetDateTime datetime = null;
     private LocalDate date = null;
@@ -62,6 +63,10 @@ class Sound implements Comparable<Sound> {
         this.local = path;
     }
 
+    public void setURI(Uri uri) {
+        this.uri = uri;
+    }
+
     public String getTitle() { return title; }
     public String getArtist() { return artist; }
     public String getComposer() { return composer; }
@@ -71,6 +76,8 @@ class Sound implements Comparable<Sound> {
     public byte[] getSHA1() { return sha1; }
     public Uri getURI() { return uri; }
     public File getLocal() { return local; }
+    public String getFilename() { return filename; }
+    public File getMetadata() { return metadata; }
 
     public int hashCode() {
         return ByteBuffer.wrap(sha1).getInt();
@@ -117,8 +124,13 @@ class Sound implements Comparable<Sound> {
     static public Sound fromLocalFile(File m) throws FileNotFoundException {
         Log.d(TAG, "reading local metadata: " + m);
         Sound s = fromInputStream(new FileInputStream(m));
+        s.metadata = m;
         File p = new File(m.getParent(), s.filename);
-        if(p.exists()) s.local = p;
+        if(p.exists()) {
+            s.local = p;
+        } else {
+            Log.w(TAG, "corresponding audio file not found: " + p);
+        }
         return s;
     }
 
@@ -152,7 +164,11 @@ class Sound implements Comparable<Sound> {
             byte[] sha1 = Hex.decodeHex(j.getString("sha1"));
 
             s = new Sound(t, a, c, sha1, d);
-            s.uri = Uri.parse(j.getString("url"));
+
+            if(!j.isNull("url")) {
+                String u = j.getString("url");
+                s.uri = Uri.parse(u);
+            }
             s.filename = j.getString("filename");
         } catch(DecoderException e) {
             throw new RuntimeException("unable to hex decode", e);
@@ -180,7 +196,7 @@ class Sound implements Comparable<Sound> {
         try {
             j.put("title", title);
             j.put("sha1", Hex.encodeHexString(sha1));
-            j.put("url", JSONObject.NULL);
+            j.put("url", uri != null ? uri.toString() : JSONObject.NULL);
             if(local != null) {
                 j.put("filename", local.getName());
             } else if(filename != null) {

@@ -6,6 +6,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -24,6 +25,7 @@ import android.content.Context;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaPlayer;
+import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.util.Log;
@@ -46,10 +48,11 @@ import net.sourceforge.javaflacencoder.EncodingConfiguration;
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.regions.Region;
 import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.model.CannedAccessControlList;
+import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
-import com.amazonaws.services.s3.model.GetObjectRequest;
 
 public class MainActivity extends Activity {
     private enum Continuation {
@@ -80,6 +83,7 @@ public class MainActivity extends Activity {
     private Set<String> granted_permissions = new HashSet<>();
 
     private AmazonS3Client s3 = null;
+    private String bucket = "rootmos-sounds";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -108,7 +112,7 @@ public class MainActivity extends Activity {
         Region r = Region.getRegion("eu-central-1");
         s3 = new AmazonS3Client(AWSAuth.getAuth(), r);
 
-        new ListSoundsTask().execute();
+        new ListSoundsTask(this).execute();
     }
 
     private boolean ensurePermissionGranted(
@@ -173,12 +177,11 @@ public class MainActivity extends Activity {
         }
 
         MetadataTemplate template = new MetadataTemplate(
-                "Session @ %t", "rootmos", "Gustav Behm",
-                "sessions", ".flac");
+                "Session @ %t", "rootmos", "Gustav Behm", ".flac");
         template.setTargetDir(new File(getBaseDir(), "sessions"));
         template.setFilename("%t%s");
 
-        recorder = new RecordTask(getTakesDir(), template);
+        recorder = new RecordTask(this, getTakesDir(), template);
         recorder.execute();
 
         state = State.RECORDING;
@@ -223,7 +226,7 @@ public class MainActivity extends Activity {
         }
 
         active_sound = s;
-        active_sound.play(this);
+        active_sound.play();
         state = State.PLAYING;
 
         Log.i(TAG, "state: ... -> playing");
@@ -236,9 +239,15 @@ public class MainActivity extends Activity {
         }
 
         active_sound.stop();
+        active_sound = null;
 
         state = State.IDLE;
         Log.i(TAG, "state transition: playing -> idle");
+    }
+
+    private void upload_sound(SoundItem s) {
+        Log.d(TAG, "preparing to upload sound: " + s.getSound().getLocal());
+        new UploadTask(this).execute(s);
     }
 
     private class RecordTask extends AsyncTask<Void, Float, Sound> {
@@ -250,8 +259,11 @@ public class MainActivity extends Activity {
         private MetadataTemplate template = null;
         private OffsetDateTime time = null;
         private AtomicBoolean stopping = new AtomicBoolean(false);
+        private Context ctx = null;
 
-        public RecordTask(File baseDir, MetadataTemplate template) {
+        public RecordTask(Context ctx, File baseDir,
+                MetadataTemplate template) {
+            this.ctx = ctx;
             this.baseDir = baseDir;
             this.template = template;
         };
@@ -401,7 +413,7 @@ public class MainActivity extends Activity {
 
         @Override
         protected void onPostExecute(Sound s) {
-            sa.addSounds(s);
+            sa.addSounds(ctx, s);
         }
 
         @Override
@@ -413,6 +425,11 @@ public class MainActivity extends Activity {
 
     private class ListSoundsTask extends AsyncTask<Void, Sound, List<Sound>> {
         File cache = null;
+        Context ctx = null;
+
+        public ListSoundsTask(Context ctx) {
+            this.ctx = ctx;
+        }
 
         @Override
         protected void onPreExecute() {
@@ -430,7 +447,7 @@ public class MainActivity extends Activity {
             }
 
             List<S3ObjectSummary> ol =
-                s3.listObjects("rootmos-sounds").getObjectSummaries();
+                s3.listObjects(bucket).getObjectSummaries();
             for(S3ObjectSummary os : ol) {
                 if(!os.getKey().endsWith(".json")) continue;
 
@@ -467,7 +484,7 @@ public class MainActivity extends Activity {
 
         @Override
         protected void onProgressUpdate(Sound... sounds) {
-            sa.addSounds(sounds);
+            sa.addSounds(ctx, sounds);
         }
     }
 
@@ -483,11 +500,13 @@ public class MainActivity extends Activity {
         private ImageButton resume = null;
         private ImageButton pause = null;
         private ImageButton stop = null;
+        private ImageButton upload = null;
 
         private MediaPlayer player = null;
         private FileInputStream is = null;
 
-        public SoundItem(Sound s) {
+        public SoundItem(Context ctx, Sound s) {
+            this.ctx = ctx;
             this.s = s;
         }
 
@@ -497,6 +516,8 @@ public class MainActivity extends Activity {
         public void onClick(View w) {
             if(w == play) {
                 play_sound(this);
+            } else if(w == upload) {
+                upload_sound(this);
             } else {
                 if(active_sound != this) {
                     Log.w(TAG, "click on inactive sound");
@@ -552,11 +573,16 @@ public class MainActivity extends Activity {
                     .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
             }
 
+            upload = (ImageButton)v.findViewById(R.id.upload);
+            upload.setOnClickListener(this);
+            if(s.getURI() == null && s.getLocal() != null) {
+                upload.setVisibility(View.VISIBLE);
+            }
+
             return v;
         }
 
-        public void play(Context ctx) {
-            this.ctx = ctx;
+        public void play() {
             player = new MediaPlayer();
 
             try {
@@ -657,15 +683,34 @@ public class MainActivity extends Activity {
                         percent, s.getTitle()),
                     Toast.LENGTH_SHORT).show();
         }
+
+        public void uploaded() {
+            upload.setVisibility(View.GONE);
+        }
     }
 
     private class SoundsAdapter extends BaseAdapter {
         ArrayList<SoundItem> ss = new ArrayList<>();
 
-        public void addSounds(Sound... ss) {
-            for(Sound s : ss) this.ss.add(new SoundItem(s));
+        public void addSounds(Context ctx, Sound... sounds) {
+            for(Sound s : sounds) {
+                Sound t = null;
+                for(SoundItem i : ss) {
+                    if(Arrays.equals(i.getSound().getSHA1(), s.getSHA1())) {
+                        t = i.getSound();
+                        break;
+                    }
+                }
+                if(t == null) {
+                    ss.add(new SoundItem(ctx, s));
+                } else {
+                    // TODO: merge sounds
+                    Log.w(TAG, "duplicate sound detected: " + s.getTitle());
+                    ss.add(new SoundItem(ctx, s));
+                }
+            }
 
-            Collections.sort(this.ss,
+            Collections.sort(ss,
                     new Comparator<SoundItem>() {
                         public int compare(SoundItem a, SoundItem b) {
                             return -1*a.getSound().compareTo(b.getSound());
@@ -689,6 +734,50 @@ public class MainActivity extends Activity {
         @Override
         public View getView(int i, View v, ViewGroup vg) {
             return ss.get(i).getView(vg);
+        }
+    }
+
+    private class UploadTask extends AsyncTask<SoundItem, SoundItem, Boolean> {
+        private Context ctx = null;
+
+        public UploadTask(Context ctx) {
+            this.ctx = ctx;
+        }
+
+        @Override
+        protected Boolean doInBackground(SoundItem... ss) {
+            for(SoundItem si : ss) {
+                Sound s = si.getSound();
+                Path r = getBaseDir().toPath()
+                    .relativize(s.getLocal().toPath().getParent());
+                String key = r.toString() + "/" + s.getFilename();
+                Log.d(TAG, String.format("uploading: s3://%s/%s", bucket, key));
+                s.setURI(Uri.parse(s3.getResourceUrl(bucket, key)));
+                s3.putObject(bucket, key, s.getLocal());
+                s3.setObjectAcl(bucket, key,
+                        CannedAccessControlList.PublicRead);
+
+                key = r.toString() + "/" + s.getMetadata().getName();
+                Log.d(TAG, String.format("uploading: s3://%s/%s", bucket, key));
+                Log.d(TAG, s.toJSON());
+                s3.putObject(bucket, key, s.toJSON());
+                s3.setObjectAcl(bucket, key,
+                        CannedAccessControlList.PublicRead);
+
+                publishProgress(si);
+            }
+            return Boolean.TRUE;
+        }
+
+        @Override
+        protected void onProgressUpdate(SoundItem... ss) {
+            for(SoundItem si : ss) {
+                Log.i(TAG, "uploaded: " + si.getSound().getURI());
+                Toast.makeText(ctx, "Uploaded: " + si.getSound().getTitle(),
+                        Toast.LENGTH_SHORT).show();
+
+                si.uploaded();
+            }
         }
     }
 }
