@@ -27,36 +27,49 @@ class MetadataTemplate {
     private File dir = null;
     private String filename = null;
 
-    public MetadataTemplate(String title, String artist, String composer) {
+    private String suffix = null;
+    private String prefix = null;
+
+    public MetadataTemplate(
+            String title, String artist, String composer,
+            String prefix, String suffix) {
         this.title = title;
         this.artist = artist;
         this.composer = composer;
+        this.suffix = suffix;
+        this.prefix = prefix;
     }
 
     public void setTargetDir(File dir) { this.dir = dir; }
     public void setFilename(String filename) { this.filename = filename; }
 
     private String renderString(String template,
-            OffsetDateTime time, float length) {
+            OffsetDateTime time, float length, String title) {
         String s = template;
         if(artist != null) s = s.replaceAll("%a", artist);
         if(composer != null) s = s.replaceAll("%c", composer);
         if(time != null) {
-            s = s.replaceAll("%t",
-                    time.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+            s = s.replaceAll("%t", time.withNano(0)
+                    .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+        }
+        if(suffix != null) s = s.replaceAll("%s", suffix);
+        if(title != null) {
+            s = s.replaceAll("%T", title);
+            s = s.replaceAll("%-T", title.replace(" ", "-"));
         }
         return s.replaceAll("%%", "%");
     }
 
     public Sound renderLocalFile(File path, OffsetDateTime time, float length) {
         try {
+            String title = renderString(this.title, time, length, null);
+            Log.d(TAG, String.format("rendered title: %s", title));
+
             if(dir != null) {
-                File dest;
-                if(filename == null) {
-                    dest = new File(dir, path.getName());
-                } else {
-                    dest = new File(dir, renderString(filename, time, length));
-                }
+                File dest = filename == null
+                    ? new File(dir, path.getName())
+                    : new File(dir, renderString(
+                                filename, time, length, title));
 
                 dir.mkdirs();
 
@@ -67,9 +80,6 @@ class MetadataTemplate {
 
             byte[] sha1 = new DigestUtils(MessageDigestAlgorithms.SHA_1)
                 .digest(path);
-
-            String title = renderString(this.title, time, length);
-            Log.d(TAG, String.format("rendered title: %s", title));
 
             AudioFile af = AudioFileIO.read(path);
             Tag t = af.getTag();
@@ -84,6 +94,13 @@ class MetadataTemplate {
             Sound s = new Sound(title, artist, composer, sha1, length);
             s.setLocal(path);
             s.setDateTime(time);
+
+            File m = new File(path.getParentFile(), path.getName().replaceAll(
+                        String.format("%s$", suffix), ".json"));
+
+            Files.write(m.toPath(), s.toJSON().getBytes("UTF-8"));
+            Log.d(TAG, "metadata written to: " + m);
+
             return s;
         } catch(Exception e) {
             throw new RuntimeException(

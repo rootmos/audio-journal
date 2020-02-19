@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 
 import org.json.JSONTokener;
@@ -132,5 +133,28 @@ class Sound implements Comparable<Sound> {
         }
 
         return s;
+    }
+
+    public String toJSON() {
+        JSONObject j = new JSONObject();
+        try {
+            j.put("title", title);
+            j.put("sha1", Hex.encodeHexString(sha1));
+            j.put("url", JSONObject.NULL);
+            if(local != null) j.put("filename", local.getName());
+            j.put("artist", artist);
+            j.put("composer", composer);
+            if(datetime != null) {
+                j.put("date", datetime.format(
+                            DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+            } else {
+                j.put("date", date.format(DateTimeFormatter.ISO_DATE));
+            }
+            j.put("year", date.getYear());
+            j.put("length", duration);
+        } catch(JSONException e) {
+            throw new RuntimeException("unable to populate JSON object", e);
+        }
+        return j.toString();
     }
 }

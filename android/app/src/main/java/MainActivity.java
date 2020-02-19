@@ -173,9 +173,10 @@ public class MainActivity extends Activity {
         }
 
         MetadataTemplate template = new MetadataTemplate(
-                "Session @ %t", "rootmos", "Gustav Behm");
+                "Session @ %t", "rootmos", "Gustav Behm",
+                "sessions", ".flac");
         template.setTargetDir(new File(getBaseDir(), "sessions"));
-        template.setFilename("%t.flac");
+        template.setFilename("%t%s");
 
         recorder = new RecordTask(getTakesDir(), template);
         recorder.execute();
@@ -541,6 +542,7 @@ public class MainActivity extends Activity {
                     s.getDate().format(DateTimeFormatter.ISO_LOCAL_DATE));
             } else {
                 ((TextView)v.findViewById(R.id.date)).setText(s.getDateTime()
+                    .withNano(0)
                     .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
             }
 
