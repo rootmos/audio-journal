@@ -81,7 +81,10 @@ class MetadataTemplate {
             af.commit();
             Log.d(TAG, String.format("tagged: %s", path));
 
-            return new Sound(title, sha1, Uri.fromFile(path));
+            Sound s = new Sound(title, artist, composer,
+                    sha1, Uri.fromFile(path), length);
+            s.setDateTime(time);
+            return s;
         } catch(Exception e) {
             throw new RuntimeException(
                     "exception while rendering local file: " + path, e);

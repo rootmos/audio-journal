@@ -400,7 +400,8 @@ public class MainActivity extends Activity {
 
         @Override
         protected void onProgressUpdate(Float... values) {
-            status_text.setText(String.format("Recording: %.2fs", values[0]));
+            status_text.setText(String.format("Recording: %s",
+                        Utils.formatDuration(values[0])));
         }
     }
 
@@ -489,6 +490,18 @@ public class MainActivity extends Activity {
             stop.setOnClickListener(this);
 
             ((TextView)v.findViewById(R.id.title)).setText(s.getTitle());
+            ((TextView)v.findViewById(R.id.artist)).setText(s.getArtist());
+            ((TextView)v.findViewById(R.id.composer)).setText(s.getComposer());
+            ((TextView)v.findViewById(R.id.duration)).setText(
+                Utils.formatDuration(s.getDuration()));
+
+            if(s.getDateTime() == null) {
+                ((TextView)v.findViewById(R.id.date)).setText(
+                    s.getDate().format(DateTimeFormatter.ISO_LOCAL_DATE));
+            } else {
+                ((TextView)v.findViewById(R.id.date)).setText(s.getDateTime()
+                    .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+            }
 
             return v;
         }

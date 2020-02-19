@@ -15,4 +15,17 @@ public class Utils {
 
         return os.toString("UTF-8");
     }
+
+    public static String formatDuration(float seconds) {
+        int s = (int)seconds;
+        int m = s/60;
+        int h = m/60;
+        m -= h*60;
+        s -= h*3600 + m*60;
+        if(h == 0) {
+            return String.format("%d:%02d", m, s);
+        } else {
+            return String.format("%d:%02d:%02d", h, m, s);
+        }
+    }
 }
