@@ -4,12 +4,14 @@ import static io.rootmos.audiojournal.Common.TAG;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.IOException;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -545,8 +547,8 @@ public class MainActivity extends Activity {
                 new MediaPlayer.OnPreparedListener() {
                     public void onPrepared(MediaPlayer m) {
                         if(player != m) {
-                            Log.w(TAG, "finished preparing an unwanted sound: " +
-                                    s.getURI());
+                            Log.w(TAG, "finished preparing an unwanted sound: "
+                                    + s.getURI());
                             return;
                         }
 
@@ -586,6 +588,14 @@ public class MainActivity extends Activity {
 
         public void addSounds(Sound... ss) {
             for(Sound s : ss) this.ss.add(new SoundItem(s));
+
+            Collections.sort(this.ss,
+                    new Comparator<SoundItem>() {
+                        public int compare(SoundItem a, SoundItem b) {
+                            return -1*a.getSound().compareTo(b.getSound());
+                        }
+                    });
+
             notifyDataSetChanged();
         }
 

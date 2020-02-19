@@ -16,7 +16,8 @@ import org.json.JSONException;
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
 
-class Sound {
+class Sound implements Comparable<Sound> {
+
     private Uri uri = null;
     private byte[] sha1 = null;
     private String title = null;
@@ -53,6 +54,22 @@ class Sound {
 
     public int hashCode() {
         return ByteBuffer.wrap(sha1).getInt();
+    }
+
+    public int compareTo(Sound o) {
+        if(date.isEqual(o.date)) {
+            if(datetime != null && o.datetime != null) {
+                if(datetime.isEqual(o.datetime)) {
+                    return 0;
+                } else {
+                    return datetime.isBefore(o.datetime) ? -1 : 1;
+                }
+            } else {
+                return 0;
+            }
+        } else {
+            return date.isBefore(o.date) ?  -1 : 1;
+        }
     }
 
     static public Sound fromInputStream(InputStream is) {
