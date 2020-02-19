@@ -329,18 +329,19 @@ public class MainActivity extends Activity {
             final int sampleRate = recorder.getSampleRate();
 
             // TODO: make the chunk size configurable
-            float seconds = 0;
             short[] samples = new short[1024*channels];
+            float seconds = 0;
+            long samples_captured = 0, samples_encoded = 0;
             while(!stopping.get()) {
                 int r = recorder.read(samples, 0, samples.length,
                         AudioRecord.READ_BLOCKING);
                 if(r < 0) {
                     throw new RuntimeException("audio recording falied: " + r);
                 }
-                Log.d(TAG, String.format("read %d samples of audio", r));
+                samples_captured += r;
 
                 int[] is = new int[r];
-                for(int i = 0; i < is.length; ++i) {
+                for(int i = 0; i < r; ++i) {
                     is[i] = samples[i];
                 }
                 encoder.addSamples(is, is.length/channels);
@@ -352,15 +353,20 @@ public class MainActivity extends Activity {
                     } catch(IOException e) {
                         throw new RuntimeException("can't encode samples", e);
                     }
-                    Log.d(TAG, String.format("encoded %d samples of audio", r));
+                    samples_encoded += r * channels;
                 }
 
                 seconds += (float)r / (channels * sampleRate);
                 publishProgress(seconds);
+
+                Log.d(TAG, String.format(
+                    "recording: duration=%.2fs, samples captured=%d encoded=%d",
+                    seconds, samples_captured, samples_encoded));
             }
 
             try {
-                int s = encoder.samplesAvailableToEncode();
+                int s = samples_encoded == samples_captured ? 0 :
+                    encoder.samplesAvailableToEncode();
                 int r = encoder.encodeSamples(s, true);
                 if(r < s) {
                     Log.w(TAG, "trying to encode end one more time");
