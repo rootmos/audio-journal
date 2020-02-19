@@ -81,8 +81,8 @@ class MetadataTemplate {
             af.commit();
             Log.d(TAG, String.format("tagged: %s", path));
 
-            Sound s = new Sound(title, artist, composer,
-                    sha1, Uri.fromFile(path), length);
+            Sound s = new Sound(title, artist, composer, sha1, length);
+            s.setLocal(path);
             s.setDateTime(time);
             return s;
         } catch(Exception e) {

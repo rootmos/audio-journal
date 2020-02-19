@@ -440,13 +440,20 @@ public class MainActivity extends Activity {
                                 os.getBucketName(), os.getKey(), os.getETag()));
                 }
 
+
                 try {
-                    Sound s = Sound.fromInputStream(new FileInputStream(f));
+                    FileInputStream is = new FileInputStream(f);
+                    Sound s = Sound.fromInputStream(is);
+                    is.close();
                     ss.add(s);
                     publishProgress(s);
                 } catch(FileNotFoundException e) {
                     throw new RuntimeException("unable to open file", e);
+                } catch(IOException e) {
+                    throw new RuntimeException(
+                            "exception while handling metadata file", e);
                 }
+
             }
             return ss;
         }
@@ -457,15 +464,21 @@ public class MainActivity extends Activity {
         }
     }
 
-    private class SoundItem implements View.OnClickListener {
+    private class SoundItem implements View.OnClickListener,
+            MediaPlayer.OnErrorListener, MediaPlayer.OnInfoListener,
+            MediaPlayer.OnPreparedListener, MediaPlayer.OnCompletionListener,
+            MediaPlayer.OnBufferingUpdateListener {
         private View v = null;
         private Sound s = null;
+        private Context ctx = null;
 
         private ImageButton play = null;
         private ImageButton resume = null;
         private ImageButton pause = null;
         private ImageButton stop = null;
+
         private MediaPlayer player = null;
+        private FileInputStream is = null;
 
         public SoundItem(Sound s) {
             this.s = s;
@@ -535,51 +548,106 @@ public class MainActivity extends Activity {
         }
 
         public void play(Context ctx) {
+            this.ctx = ctx;
             player = new MediaPlayer();
+
             try {
-                player.setDataSource(ctx, s.getURI());
+                if(s.getLocal() != null) {
+                    is = new FileInputStream(s.getLocal());
+                    Log.d(TAG, "using local data source: " + s.getLocal());
+                    player.setDataSource(is.getFD());
+                } else if(s.getURI() != null) {
+                    Log.d(TAG, "using remote data source: " + s.getURI());
+                    player.setDataSource(ctx, s.getURI());
+                } else {
+                    Log.e(TAG, "no source for sound: " + s.getTitle());
+                    return;
+                }
             } catch(IOException e) {
-                Log.e(TAG, "unable to play: " + s.getURI(), e);
+                Log.e(TAG, "unable to set data source", e);
                 return;
             }
 
-            player.setOnPreparedListener(
-                new MediaPlayer.OnPreparedListener() {
-                    public void onPrepared(MediaPlayer m) {
-                        if(player != m) {
-                            Log.w(TAG, "finished preparing an unwanted sound: "
-                                    + s.getURI());
-                            return;
-                        }
-
-                        m.start();
-
-                        play.setVisibility(View.GONE);
-                        pause.setVisibility(View.VISIBLE);
-                        resume.setVisibility(View.GONE);
-                        stop.setVisibility(View.VISIBLE);
-
-                        Log.i(TAG, "playing: " + s.getURI());
-                    }
-                }
-            );
+            player.setOnPreparedListener(this);
+            player.setOnErrorListener(this);
+            player.setOnInfoListener(this);
+            player.setOnBufferingUpdateListener(this);
+            player.setOnCompletionListener(this);
 
             play.setEnabled(false);
             player.prepareAsync();
-            Log.i(TAG, "preparing: " + s.getURI());
+            Log.i(TAG, String.format("preparing: local=%s uri=%s",
+                        s.getLocal(), s.getURI()));
         }
 
         public void stop() {
-            Log.i(TAG, "stopping: " + s.getURI());
+            Log.i(TAG, String.format("stopping: local=%s uri=%s",
+                    s.getLocal(), s.getURI()));
+
             if(player.isPlaying()) player.stop();
             player.release();
             player = null;
+
+            if(is != null) {
+                try {
+                    is.close();
+                    is = null;
+                } catch(IOException e) {
+                    throw new RuntimeException("unable to close file", e);
+                }
+            }
 
             play.setEnabled(true);
             play.setVisibility(View.VISIBLE);
             pause.setVisibility(View.GONE);
             resume.setVisibility(View.GONE);
             stop.setVisibility(View.GONE);
+        }
+
+        public void onCompletion(MediaPlayer m) {
+            stop_playing();
+        }
+
+        public void onPrepared(MediaPlayer m) {
+            m.start();
+
+            play.setVisibility(View.GONE);
+            pause.setVisibility(View.VISIBLE);
+            resume.setVisibility(View.GONE);
+            stop.setVisibility(View.VISIBLE);
+
+            Log.i(TAG, String.format("playing: local=%s uri=%s",
+                        s.getLocal(), s.getURI()));
+        }
+
+        public boolean onError(MediaPlayer m, int what, int extra) {
+            Log.e(TAG, String.format("media error (%d): local=%s uri=%s",
+                        what, s.getLocal(), s.getURI()));
+            Toast.makeText(ctx, "Can't play: " + s.getTitle(),
+                    Toast.LENGTH_SHORT).show();
+            return true;
+        }
+
+        public boolean onInfo(MediaPlayer m, int what, int extra) {
+            Log.d(TAG, String.format("media info (%d -> %d): local=%s uri=%s",
+                        what, extra, s.getLocal(), s.getURI()));
+
+            if(what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
+                Toast.makeText(ctx, "Buffering: " + s.getTitle(),
+                        Toast.LENGTH_SHORT).show();
+                return true;
+            }
+
+            return false;
+        }
+
+        public void onBufferingUpdate(MediaPlayer m, int percent) {
+            Log.d(TAG, String.format("buffering (%d%%): local=%s uri=%s",
+                        percent, s.getLocal(), s.getURI()));
+            Toast.makeText(ctx,
+                    String.format("Buffering (%d%%): %s",
+                        percent, s.getTitle()),
+                    Toast.LENGTH_SHORT).show();
         }
     }
 
