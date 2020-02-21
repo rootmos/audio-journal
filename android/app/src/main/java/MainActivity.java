@@ -187,7 +187,9 @@ public class MainActivity extends Activity {
         state = State.RECORDING;
         status_text.setText("Recording!");
         stop_button.setEnabled(true);
+        stop_button.setVisibility(View.VISIBLE);
         start_button.setEnabled(false);
+        start_button.setVisibility(View.GONE);
 
         Log.i(TAG, "state: recording");
     }
@@ -203,7 +205,9 @@ public class MainActivity extends Activity {
         state = State.IDLE;
         status_text.setText("Not recording");
         stop_button.setEnabled(false);
+        stop_button.setVisibility(View.GONE);
         start_button.setEnabled(true);
+        start_button.setVisibility(View.VISIBLE);
 
         Log.i(TAG, "state: recording -> idle");
     }
