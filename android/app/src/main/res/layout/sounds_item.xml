@@ -97,7 +97,6 @@
         android:gravity="end"
         android:orientation="horizontal"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toEndOf="@+id/metadata"
         app:layout_constraintTop_toTopOf="parent">
 
         <ImageButton
