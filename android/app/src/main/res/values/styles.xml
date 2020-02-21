@@ -1,3 +1,12 @@
 <resources>
 	<style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar" />
+
+	<style name="metadata_label">
+		<item name="android:paddingRight">10dp</item>
+		<item name="android:textSize">10sp</item>
+	</style>
+
+	<style name="metadata_content">
+		<item name="android:textSize">12sp</item>
+	</style>
 </resources>

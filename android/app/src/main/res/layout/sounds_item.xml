@@ -17,11 +17,15 @@
         <TextView
             android:id="@+id/title"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content" />
+            android:layout_height="wrap_content"
+            android:textSize="16sp" />
 
         <TableLayout
+            android:paddingLeft="10dp"
+            android:paddingTop="3dp"
+            android:paddingBottom="3dp"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content">
+            android:layout_height="wrap_content" >
 
             <TableRow
                 android:layout_width="match_parent"
@@ -29,12 +33,14 @@
 
                 <TextView
                     android:id="@+id/artistLabel"
+                    style="@style/metadata_label"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/artist_label" />
 
                 <TextView
                     android:id="@+id/artist"
+                    style="@style/metadata_content"
                     android:layout_width="wrap_content"
                     android:layout_height="match_parent" />
             </TableRow>
@@ -45,12 +51,14 @@
 
                 <TextView
                     android:id="@+id/composerLabel"
+                    style="@style/metadata_label"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/composer_label" />
 
                 <TextView
                     android:id="@+id/composer"
+                    style="@style/metadata_content"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content" />
             </TableRow>
@@ -61,12 +69,14 @@
 
                 <TextView
                     android:id="@+id/durationLabel"
+                    style="@style/metadata_label"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/duration_label" />
 
                 <TextView
                     android:id="@+id/duration"
+                    style="@style/metadata_content"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content" />
             </TableRow>
@@ -77,12 +87,14 @@
 
                 <TextView
                     android:id="@+id/dateLabel"
+                    style="@style/metadata_label"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/date_label" />
 
                 <TextView
                     android:id="@+id/date"
+                    style="@style/metadata_content"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content" />
             </TableRow>
@@ -97,7 +109,7 @@
         android:gravity="end"
         android:orientation="horizontal"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="parent">
+        app:layout_constraintBottom_toBottomOf="parent">
 
         <ImageButton
             android:id="@+id/play"
