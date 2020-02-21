@@ -38,6 +38,7 @@
                 android:layout_height="match_parent"
                 android:drawableStart="@drawable/stop_recording"
                 android:text="@string/stop_recording"
+                android:keepScreenOn="true"
                 android:enabled="false"
                 android:visibility="gone" />
         </LinearLayout>
