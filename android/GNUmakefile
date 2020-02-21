@@ -1,6 +1,7 @@
 GRADLE ?= gradle
 GRADLE_OPTS ?= --warning-mode=none --console=plain
-export ANDROID_SDK_ROOT ?= $(shell pwd)/sdk
+export ANDROID_SDK_ROOT = $(shell pwd)/sdk
+export ANDROID_SDK_HOME = $(shell pwd)
 export ANDROID_HOME = $(ANDROID_SDK_ROOT)
 ANDROID_SDK_BIN=$(ANDROID_SDK_ROOT)/tools/bin
 
@@ -20,15 +21,19 @@ logs:
 	adb logcat AudioJournal:D AndroidRuntime:E *:S
 
 AVD=audio-journal-avd
-AVD_ROOT=$(ANDROID_SDK_ROOT)/avd
 SDK_ID=system-images;android-28;default;x86_64
-prepare-emulator:
-	$(ANDROID_SDK_BIN)/sdkmanager --install emulator "$(SDK_ID)"
+PLATFORM=platforms;android-28
+DEVICE_ID=MI
+prepare-emulator: $(ANDROID_SDK_ROOT)
+	$(ANDROID_SDK_BIN)/sdkmanager --install \
+		emulator platform-tools "$(SDK_ID)" "$(PLATFORM)"
+	install -m 644 -D -t "$(ANDROID_SDK_HOME)/.android" devices.xml
 	$(ANDROID_SDK_BIN)/avdmanager create avd \
-		--force -n $(AVD) -k "$(SDK_ID)" -p $(AVD_ROOT)
+		--force --name "$(AVD)" --package "$(SDK_ID)" \
+		--device "$(DEVICE_ID)"
 
 run-emulator:
 	$(ANDROID_SDK_ROOT)/tools/emulator -avd $(AVD)
 
-.PHONY: build clean
+.PHONY: build install clean
 .PHONY: logs prepare-emulator run-emulator
