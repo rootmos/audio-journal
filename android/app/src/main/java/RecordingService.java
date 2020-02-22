@@ -7,6 +7,8 @@ import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.ArrayList;
 
 import android.app.Service;
@@ -31,6 +33,7 @@ import net.sourceforge.javaflacencoder.EncodingConfiguration;
 public class RecordingService extends Service {
     private static int NOTIFICATION_ID = 603141;
     private NotificationManager nm = null;
+    private Executor ex = null;
 
     private RecordTask recordTask = null;
     private boolean stopWhenNotRecording = false;
@@ -75,6 +78,7 @@ public class RecordingService extends Service {
     @Override
     public void onCreate() {
         nm = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
+        ex = Executors.newFixedThreadPool(1);
     }
 
     @Override
@@ -198,7 +202,7 @@ public class RecordingService extends Service {
         }
 
         recordTask = new RecordTask(template, takesDir);
-        recordTask.execute();
+        recordTask.executeOnExecutor(ex);
 
         startForeground(NOTIFICATION_ID, buildNotification(-1));
 
