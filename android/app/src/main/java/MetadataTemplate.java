@@ -3,6 +3,8 @@ package io.rootmos.audiojournal;
 import static io.rootmos.audiojournal.Common.TAG;
 
 import android.net.Uri;
+import android.os.Parcel;
+import android.os.Parcelable;
 import android.util.Log;
 
 import java.io.File;
@@ -19,7 +21,7 @@ import org.jaudiotagger.tag.Tag;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.codec.digest.MessageDigestAlgorithms;
 
-class MetadataTemplate {
+class MetadataTemplate implements Parcelable {
     private String title = null;
     private String artist = null;
     private String composer = null;
@@ -37,11 +39,45 @@ class MetadataTemplate {
         this.suffix = suffix;
     }
 
+    public String getTitle() { return title; }
+
     public void setTargetDir(File dir) { this.dir = dir; }
     public void setFilename(String filename) { this.filename = filename; }
 
+    @Override
+    public int describeContents () { return 0; }
+
+    @Override
+    public void writeToParcel(Parcel out, int flags) {
+        out.writeString(title);
+        out.writeString(artist);
+        out.writeString(composer);
+        out.writeString(suffix);
+        out.writeString(dir != null ? dir.toString() : null);
+        out.writeString(filename != null ? filename.toString() : null);
+    }
+
+    public static final Parcelable.Creator<MetadataTemplate> CREATOR =
+        new Parcelable.Creator<MetadataTemplate>() {
+            public MetadataTemplate createFromParcel(Parcel in) {
+                MetadataTemplate mt = new MetadataTemplate(
+                        in.readString(),
+                        in.readString(),
+                        in.readString(),
+                        in.readString());
+                String dir = in.readString();
+                if(dir != null) mt.setTargetDir(new File(dir));
+                mt.setFilename(in.readString());
+                return mt;
+            }
+
+            public MetadataTemplate[] newArray(int size) {
+                return new MetadataTemplate[size];
+            }
+        };
+
     private String renderString(String template,
-            OffsetDateTime time, float length, String title) {
+            OffsetDateTime time, String title) {
         String s = template;
         if(artist != null) s = s.replaceAll("%a", artist);
         if(composer != null) s = s.replaceAll("%c", composer);
@@ -57,16 +93,19 @@ class MetadataTemplate {
         return s.replaceAll("%%", "%");
     }
 
+    public String renderTitle(OffsetDateTime time) {
+        return renderString(this.title, time, null);
+    }
+
     public Sound renderLocalFile(File path, OffsetDateTime time, float length) {
         try {
-            String title = renderString(this.title, time, length, null);
+            String title = renderTitle(time);
             Log.d(TAG, String.format("rendered title: %s", title));
 
             if(dir != null) {
                 File dest = filename == null
                     ? new File(dir, path.getName())
-                    : new File(dir, renderString(
-                                filename, time, length, title));
+                    : new File(dir, renderString(filename, time, title));
 
                 dir.mkdirs();
 

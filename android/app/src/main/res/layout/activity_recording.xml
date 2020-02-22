@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+	xmlns:android="http://schemas.android.com/apk/res/android"
+	android:layout_width="match_parent"
+	android:layout_height="match_parent"
+	android:orientation="vertical">
+
+<TextView
+	android:id="@+id/status"
+	android:layout_height="0dp"
+	android:layout_width="match_parent"
+	android:layout_weight="70" />
+
+<Button
+	android:id="@+id/stop"
+	android:layout_width="match_parent"
+	android:layout_height="0dp"
+	android:drawableStart="@drawable/stop_recording"
+	android:text="@string/stop_recording"
+	android:keepScreenOn="true"
+	android:layout_weight="30" />
+
+</LinearLayout>

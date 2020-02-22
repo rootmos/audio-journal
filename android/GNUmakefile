@@ -3,13 +3,17 @@ GRADLE_OPTS ?= --warning-mode=none --console=plain
 export ANDROID_SDK_ROOT = $(shell pwd)/sdk
 export ANDROID_SDK_HOME = $(shell pwd)
 export ANDROID_HOME = $(ANDROID_SDK_ROOT)
-ANDROID_SDK_BIN=$(ANDROID_SDK_ROOT)/tools/bin
+ANDROID_SDK_BIN = $(ANDROID_SDK_ROOT)/tools/bin
+ADB ?= $(ANDROID_SDK_ROOT)/platform-tools/adb
 
 build: $(ANDROID_SDK_ROOT)
 	@$(GRADLE) $(GRADLE_OPTS) build
 
 install: $(ANDROID_SDK_ROOT)
 	@$(GRADLE) $(GRADLE_OPTS) installDebug
+
+start:
+	@$(ADB) shell am start -n io.rootmos.audiojournal/.MainActivity
 
 $(ANDROID_SDK_ROOT):
 	./sdk.sh "$@"
@@ -18,7 +22,7 @@ clean:
 	@$(GRADLE) $(GRADLE_OPTS) clean
 
 logs:
-	adb logcat AudioJournal:D AndroidRuntime:E *:S
+	adb logcat AudioJournal:I AndroidRuntime:E *:S
 
 AVD=audio-journal-avd
 SDK_ID=system-images;android-28;default;x86_64

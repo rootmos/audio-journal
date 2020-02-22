@@ -2,52 +2,28 @@
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical" >
 
-    <LinearLayout
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="20"
-        android:orientation="horizontal">
+        android:layout_height="match_parent">
 
-        <TextView
-            android:id="@+id/status"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="70" />
+        <ListView
+            android:id="@+id/sounds"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
 
-        <LinearLayout
+        <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+            android:id="@+id/start_stop_recording"
             android:layout_width="wrap_content"
-            android:layout_height="match_parent"
-            android:layout_weight="30"
-            android:orientation="vertical">
+            android:layout_height="wrap_content"
+            android:layout_gravity="end|bottom"
+            app:icon="@drawable/start_recording"
+            android:text="@string/start_recording"
+            android:layout_margin="16dp" />
 
-            <Button
-                android:id="@+id/start"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:drawableStart="@drawable/start_recording"
-                android:text="@string/start_recording" />
-
-            <Button
-                android:id="@+id/stop"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:drawableStart="@drawable/stop_recording"
-                android:text="@string/stop_recording"
-                android:keepScreenOn="true"
-                android:enabled="false"
-                android:visibility="gone" />
-        </LinearLayout>
-    </LinearLayout>
-
-    <ListView
-        android:id="@+id/sounds"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="80" />
+    </FrameLayout>
 
 </LinearLayout>

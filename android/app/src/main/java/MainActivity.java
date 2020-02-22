@@ -22,12 +22,16 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.content.Context;
+import android.content.Intent;
+import android.content.ComponentName;
+import android.content.ServiceConnection;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
@@ -37,6 +41,8 @@ import android.widget.ImageButton;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 
 import androidx.core.app.ActivityCompat;
 
@@ -54,7 +60,8 @@ import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements
+    RecordingService.OnStateChangeListener {
     private enum Continuation {
         RECORD(815468);
 
@@ -72,12 +79,27 @@ public class MainActivity extends Activity {
     };
     private State state = State.IDLE;
 
-    private TextView status_text = null;;
-    private Button start_button = null;
-    private Button stop_button = null;
+    private RecordingService.Binder rs = null;
+    ServiceConnection sc = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            Log.i(TAG, "main activity connected to recording service");
+            rs = (RecordingService.Binder)service;
+            rs.addStateChangeListener(MainActivity.this);
+            applyRecordingState();
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            Log.i(TAG, "main activity disconnected to recording service");
+            rs = null;
+        }
+    };
+
+    private TextView status_text = null;
+    private ExtendedFloatingActionButton fab = null;
 
     private SoundsAdapter sa = new SoundsAdapter();
-    private RecordTask recorder = null;
     private SoundItem active_sound = null;
 
     private Set<String> granted_permissions = new HashSet<>();
@@ -89,30 +111,47 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
         status_text = (TextView)findViewById(R.id.status);
-        start_button = (Button)findViewById(R.id.start);
-        stop_button = (Button)findViewById(R.id.stop);
+        fab = (ExtendedFloatingActionButton)
+            findViewById(R.id.start_stop_recording);
 
         ((ListView)findViewById(R.id.sounds)).setAdapter(sa);
 
-        Log.d(TAG, "creating main activity");
+        Log.i(TAG, "creating main activity");
 
-        start_button.setOnClickListener(new View.OnClickListener() {
+        fab.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                start_recording();
-            }
-        });
-
-        stop_button.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) {
-                stop_recording();
+                toggle_recording();
             }
         });
 
         Region r = Region.getRegion("eu-central-1");
         s3 = new AmazonS3Client(AWSAuth.getAuth(), r);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        Log.i(TAG, "stopping main activity");
+        rs.removeStateChangeListener(this);
+        unbindService(sc);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        Log.i(TAG, "resuming main activity");
+
+        RecordingService.bind(this, sc);
 
         new ListSoundsTask(this).execute();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        Log.i(TAG, "destroying main activity");
     }
 
     private boolean ensurePermissionGranted(
@@ -181,35 +220,42 @@ public class MainActivity extends Activity {
         template.setTargetDir(new File(getBaseDir(), "sessions"));
         template.setFilename("%t%s");
 
-        recorder = new RecordTask(this, getTakesDir(), template);
-        recorder.execute();
-
-        state = State.RECORDING;
-        status_text.setText("Recording!");
-        stop_button.setEnabled(true);
-        stop_button.setVisibility(View.VISIBLE);
-        start_button.setEnabled(false);
-        start_button.setVisibility(View.GONE);
+        RecordingService.start(this, template, getTakesDir());
+        startActivity(new Intent(this, RecordingActivity.class));
 
         Log.i(TAG, "state: recording");
     }
 
-    private void stop_recording() {
-        if(state != State.RECORDING) {
-            Log.e(TAG, "trying to stop recording in non-recording state");
-            return;
+    private void toggle_recording() {
+        if(state == State.RECORDING) {
+            rs.stop();
+        } else {
+            start_recording();
         }
+    }
 
-        recorder.stop();
+    @Override
+    public void recordingStarted() {
+        applyRecordingState();
+    }
 
-        state = State.IDLE;
-        status_text.setText("Not recording");
-        stop_button.setEnabled(false);
-        stop_button.setVisibility(View.GONE);
-        start_button.setEnabled(true);
-        start_button.setVisibility(View.VISIBLE);
+    @Override
+    public void recordingCompleted(Sound s) {
+        sa.addSounds(this, s);
+        applyRecordingState();
+    }
 
-        Log.i(TAG, "state: recording -> idle");
+    public void applyRecordingState() {
+        Log.d(TAG, "applying recording state: " + rs.isRecording());
+        if(rs.isRecording()) {
+            state = State.RECORDING;
+            fab.setText(getText(R.string.stop_recording));
+            fab.setIcon(getDrawable(R.drawable.stop_recording));
+        } else {
+            if(state == State.RECORDING) state = State.IDLE;
+            fab.setText(getText(R.string.start_recording));
+            fab.setIcon(getDrawable(R.drawable.start_recording));
+        }
     }
 
     private void play_sound(SoundItem s) {
@@ -252,179 +298,6 @@ public class MainActivity extends Activity {
     private void upload_sound(SoundItem s) {
         Log.d(TAG, "preparing to upload sound: " + s.getSound().getLocal());
         new UploadTask(this).execute(s);
-    }
-
-    private class RecordTask extends AsyncTask<Void, Float, Sound> {
-        private AudioRecord recorder = null;
-        private FLACEncoder encoder = null;
-        private File baseDir = null;
-        private FLACFileOutputStream out = null;
-        private File path = null;
-        private MetadataTemplate template = null;
-        private OffsetDateTime time = null;
-        private AtomicBoolean stopping = new AtomicBoolean(false);
-        private Context ctx = null;
-
-        public RecordTask(Context ctx, File baseDir,
-                MetadataTemplate template) {
-            this.ctx = ctx;
-            this.baseDir = baseDir;
-            this.template = template;
-        };
-
-        public void stop() { stopping.set(true); }
-
-        @Override
-        protected void onPreExecute() {
-            int sampleRate = 48000;
-
-            int minBufSize = AudioRecord.getMinBufferSize(sampleRate,
-                    AudioFormat.CHANNEL_IN_STEREO,
-                    AudioFormat.ENCODING_PCM_16BIT);
-            Log.d(TAG, "recommended minimum buffer size: " + minBufSize);
-
-            int bufSize = Math.max(491520, minBufSize);
-
-            while(true) {
-                recorder = new AudioRecord.Builder()
-                    .setAudioFormat(new AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(sampleRate)
-                            .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
-                            .build())
-                    .setBufferSizeInBytes(bufSize)
-                    .build();
-
-                // ensure 1 seconds of audio fits in the buffer
-                if(recorder.getBufferSizeInFrames() >=
-                        recorder.getChannelCount() *
-                        recorder.getSampleRate()) {
-                    break;
-                } else {
-                    recorder.release();
-                    recorder = null;
-                    bufSize *= 2;
-                    Log.d(TAG, "buffer too small, trying: " + bufSize);
-                }
-            }
-
-            Log.d(TAG, "configured channel count: " + recorder.getChannelCount());
-            Log.d(TAG, "configured sample rate: " + recorder.getSampleRate());
-            Log.d(TAG, "configured buffer size in frames: " + recorder.getBufferSizeInFrames());
-
-            encoder = new FLACEncoder();
-            StreamConfiguration sc = new StreamConfiguration();
-            sc.setChannelCount(recorder.getChannelCount());
-            sc.setSampleRate(recorder.getSampleRate());
-            sc.setBitsPerSample(16);
-            encoder.setStreamConfiguration(sc);
-
-            EncodingConfiguration ec = new EncodingConfiguration();
-            ec.setSubframeType(EncodingConfiguration.SubframeType.EXHAUSTIVE);
-            encoder.setEncodingConfiguration(ec);
-
-            time = OffsetDateTime.now();
-
-            String fn = time.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
-                + ".flac";
-            path = new File(baseDir, fn);
-            try {
-                baseDir.mkdirs();
-
-                out = new FLACFileOutputStream(path);
-                if(!out.isValid()) {
-                    throw new RuntimeException("can't open output stream");
-                }
-                encoder.setOutputStream(out);
-                encoder.openFLACStream();
-            } catch(IOException e) {
-                throw new RuntimeException("can't open output stream", e);
-            }
-            Log.i(TAG, "recording: " + path);
-
-            recorder.startRecording();
-        }
-
-        @Override
-        protected Sound doInBackground(Void... params) {
-            final int channels = recorder.getChannelCount();
-            final int sampleRate = recorder.getSampleRate();
-
-            // TODO: make the chunk size configurable
-            short[] samples = new short[1024*channels];
-            float seconds = 0;
-            long samples_captured = 0, samples_encoded = 0;
-            while(!stopping.get()) {
-                int r = recorder.read(samples, 0, samples.length,
-                        AudioRecord.READ_BLOCKING);
-                if(r < 0) {
-                    throw new RuntimeException("audio recording falied: " + r);
-                }
-                samples_captured += r;
-
-                int[] is = new int[r];
-                for(int i = 0; i < r; ++i) {
-                    is[i] = samples[i];
-                }
-                encoder.addSamples(is, is.length/channels);
-
-                int enc;
-                if((enc = encoder.fullBlockSamplesAvailableToEncode()) > 0) {
-                    try {
-                        r = encoder.encodeSamples(enc, false);
-                    } catch(IOException e) {
-                        throw new RuntimeException("can't encode samples", e);
-                    }
-                    samples_encoded += r * channels;
-                }
-
-                seconds += (float)r / (channels * sampleRate);
-                publishProgress(seconds);
-
-                Log.d(TAG, String.format(
-                    "recording: duration=%.2fs, samples captured=%d encoded=%d",
-                    seconds, samples_captured, samples_encoded));
-            }
-
-            try {
-                int s = samples_encoded == samples_captured ? 0 :
-                    encoder.samplesAvailableToEncode();
-                int r = encoder.encodeSamples(s, true);
-                if(r < s) {
-                    Log.w(TAG, "trying to encode end one more time");
-                    encoder.encodeSamples(s, true);
-                }
-            } catch(IOException e) {
-                throw new RuntimeException("can't encode samples", e);
-            }
-
-            Log.e(TAG, "releasing audio recorder");
-            recorder.stop();
-            recorder.release();
-            recorder = null;
-
-            try {
-                out.close();
-            } catch(IOException e) {
-                throw new RuntimeException("can't close output stream", e);
-            }
-
-            Log.i(TAG, String.format("finished recording (%.2fs): %s",
-                        seconds, path));
-
-            return template.renderLocalFile(path, time, seconds);
-        }
-
-        @Override
-        protected void onPostExecute(Sound s) {
-            sa.addSounds(ctx, s);
-        }
-
-        @Override
-        protected void onProgressUpdate(Float... values) {
-            status_text.setText(String.format("Recording: %s",
-                        Utils.formatDuration(values[0])));
-        }
     }
 
     private class ListSoundsTask extends AsyncTask<Void, Sound, List<Sound>> {
@@ -695,10 +568,12 @@ public class MainActivity extends Activity {
         public void merge(Sound o) {
             s.merge(o);
 
-            if(s.getURI() == null && s.getLocal() != null) {
-                upload.setVisibility(View.VISIBLE);
-            } else {
-                upload.setVisibility(View.GONE);
+            if(upload != null) {
+                if(s.getURI() == null && s.getLocal() != null) {
+                    upload.setVisibility(View.VISIBLE);
+                } else {
+                    upload.setVisibility(View.GONE);
+                }
             }
         }
     }
