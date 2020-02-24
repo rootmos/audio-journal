@@ -21,8 +21,9 @@ $(ANDROID_SDK_ROOT):
 clean:
 	@$(GRADLE) $(GRADLE_OPTS) clean
 
+LOG_LEVEL ?= I
 logs:
-	adb logcat AudioJournal:I AndroidRuntime:E *:S
+	adb logcat AudioJournal:$(LOG_LEVEL) AndroidRuntime:E *:S
 
 AVD=audio-journal-avd
 SDK_ID=system-images;android-28;default;x86_64

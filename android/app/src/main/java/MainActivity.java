@@ -13,14 +13,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import android.Manifest;
 import android.app.Activity;
-import android.content.pm.PackageManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ComponentName;
@@ -36,7 +32,6 @@ import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
-import android.widget.Button;
 import android.widget.ImageButton;
 import android.widget.ListView;
 import android.widget.TextView;
@@ -62,17 +57,6 @@ import com.amazonaws.services.s3.model.S3ObjectSummary;
 
 public class MainActivity extends Activity implements
     RecordingService.OnStateChangeListener {
-    private enum Continuation {
-        RECORD(815468);
-
-        private final int value;
-        private Continuation(int value) {
-            this.value = value;
-        }
-        public int getValue() {
-            return value;
-        }
-    };
 
     private enum State {
         IDLE, RECORDING, PLAYING
@@ -102,27 +86,27 @@ public class MainActivity extends Activity implements
     private SoundsAdapter sa = new SoundsAdapter();
     private SoundItem active_sound = null;
 
-    private Set<String> granted_permissions = new HashSet<>();
-
     private AmazonS3Client s3 = null;
     private String bucket = "rootmos-sounds";
+
+    private Settings settings = new Settings(this);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        Log.i(TAG, "creating main activity");
 
         status_text = (TextView)findViewById(R.id.status);
-        fab = (ExtendedFloatingActionButton)
-            findViewById(R.id.start_stop_recording);
 
         ((ListView)findViewById(R.id.sounds)).setAdapter(sa);
 
-        Log.i(TAG, "creating main activity");
-
+        fab = (ExtendedFloatingActionButton)
+            findViewById(R.id.start_stop_recording);
         fab.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                toggle_recording();
+                startActivity(new Intent(MainActivity.this,
+                            RecordingActivity.class));
             }
         });
 
@@ -154,86 +138,6 @@ public class MainActivity extends Activity implements
         Log.i(TAG, "destroying main activity");
     }
 
-    private boolean ensurePermissionGranted(
-            Continuation continuation,
-            String[] permissions) {
-        if(granted_permissions.containsAll(Arrays.asList(permissions))) {
-            return true;
-        }
-
-        ActivityCompat.requestPermissions(
-                this,
-                permissions,
-                continuation.getValue());
-
-        return false;
-    }
-
-    @Override
-    public void onRequestPermissionsResult(
-            int requestCode,
-            String[] permissions,
-            int[] grantResults) {
-
-        for(int i = 0; i < permissions.length; ++i) {
-            if(grantResults[i] == PackageManager.PERMISSION_GRANTED) {
-                Log.d(TAG, "was granted: " + permissions[i]);
-                granted_permissions.add(permissions[i]);
-            }
-        }
-
-        if(requestCode == Continuation.RECORD.getValue()) {
-            start_recording();
-        } else {
-            Log.e(TAG, "unexpected requestCode: " + requestCode);
-        }
-    }
-
-    private File getBaseDir() {
-        File[] rs = getExternalMediaDirs();
-        if(rs.length == 0) {
-            throw new RuntimeException("no media dirs");
-        }
-        return rs[0];
-    }
-
-    private File getTakesDir() {
-        return new File(getBaseDir(), "takes");
-    }
-
-    private void start_recording() {
-        if(state == State.RECORDING) {
-            Log.e(TAG, "illegal state transition: recording -> recording");
-            return;
-        } else if(state == State.PLAYING) {
-            stop_playing();
-        }
-
-        if(!ensurePermissionGranted(
-                    Continuation.RECORD,
-                    new String[] { Manifest.permission.RECORD_AUDIO })) {
-            return;
-        }
-
-        MetadataTemplate template = new MetadataTemplate(
-                "Session @ %t", "rootmos", "Gustav Behm", ".flac");
-        template.setTargetDir(new File(getBaseDir(), "sessions"));
-        template.setFilename("%t%s");
-
-        RecordingService.start(this, template, getTakesDir());
-        startActivity(new Intent(this, RecordingActivity.class));
-
-        Log.i(TAG, "state: recording");
-    }
-
-    private void toggle_recording() {
-        if(state == State.RECORDING) {
-            rs.stop();
-        } else {
-            start_recording();
-        }
-    }
-
     @Override
     public void recordingStarted() {
         applyRecordingState();
@@ -248,6 +152,9 @@ public class MainActivity extends Activity implements
     public void applyRecordingState() {
         Log.d(TAG, "applying recording state: " + rs.isRecording());
         if(rs.isRecording()) {
+            if(state == State.PLAYING) {
+                stop_playing();
+            }
             state = State.RECORDING;
             fab.setText(getText(R.string.stop_recording));
             fab.setIcon(getDrawable(R.drawable.stop_recording));
@@ -301,7 +208,6 @@ public class MainActivity extends Activity implements
     }
 
     private class ListSoundsTask extends AsyncTask<Void, Sound, List<Sound>> {
-        File cache = null;
         Context ctx = null;
 
         public ListSoundsTask(Context ctx) {
@@ -309,16 +215,10 @@ public class MainActivity extends Activity implements
         }
 
         @Override
-        protected void onPreExecute() {
-            cache = new File(getCacheDir(), "upstream");
-            cache.mkdirs();
-        }
-
-        @Override
         protected List<Sound> doInBackground(Void... params) {
             ArrayList<Sound> ss = new ArrayList<>();
 
-            for(Sound s : Sound.scanDir(getBaseDir())) {
+            for(Sound s : Sound.scanDir(settings.getBaseDir())) {
                 ss.add(s);
                 publishProgress(s);
             }
@@ -328,7 +228,7 @@ public class MainActivity extends Activity implements
             for(S3ObjectSummary os : ol) {
                 if(!os.getKey().endsWith(".json")) continue;
 
-                File f = new File(cache, os.getETag());
+                File f = new File(settings.getUpstreamCacheDir(), os.getETag());
                 if(!f.exists()) {
                     Log.d(TAG, String.format(
                                 "fetching metadata: s3://%s/%s etag=%s",
@@ -635,7 +535,7 @@ public class MainActivity extends Activity implements
         protected Boolean doInBackground(SoundItem... ss) {
             for(SoundItem si : ss) {
                 Sound s = si.getSound();
-                Path r = getBaseDir().toPath()
+                Path r = settings.getBaseDir().toPath()
                     .relativize(s.getLocal().toPath().getParent());
                 String key = r.toString() + "/" + s.getFilename();
                 Log.d(TAG, String.format("uploading: s3://%s/%s", bucket, key));
