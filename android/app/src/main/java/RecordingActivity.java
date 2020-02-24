@@ -53,8 +53,8 @@ public class RecordingActivity extends Activity implements
         }
     };
 
-    public void recordingProgress(float s) {
-        status_text.setText(Utils.formatDurationLong(s));
+    public void recordingProgress(RecordingService.Progress p) {
+        status_text.setText(Utils.formatDurationLong(p.getSeconds()));
     }
 
     @Override

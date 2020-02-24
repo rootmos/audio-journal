@@ -39,7 +39,7 @@ public class RecordingService extends Service {
     private boolean stopWhenNotRecording = false;
 
     public interface OnProgressListener {
-        public abstract void recordingProgress(float seconds);
+        public abstract void recordingProgress(Progress progress);
     }
     private ArrayList<OnProgressListener> progressListeners = new ArrayList<>();
 
@@ -169,7 +169,7 @@ public class RecordingService extends Service {
         return true;
     }
 
-    private Notification buildNotification(float seconds) {
+    private Notification buildNotification(Progress progress) {
         TaskStackBuilder sb = TaskStackBuilder.create(this);
         sb.addNextIntentWithParentStack(mkShowIntent());
         PendingIntent p = sb.getPendingIntent(0,
@@ -188,8 +188,8 @@ public class RecordingService extends Service {
             .setContentTitle(recordTask.getTitle())
             .addAction(a);
 
-        if(seconds > 0) {
-            b.setContentText(Utils.formatDuration(seconds));
+        if(progress != null) {
+            b.setContentText(Utils.formatDuration(progress.getSeconds()));
         }
 
         return b.build();
@@ -204,7 +204,7 @@ public class RecordingService extends Service {
         recordTask = new RecordTask(template, takesDir);
         recordTask.executeOnExecutor(ex);
 
-        startForeground(NOTIFICATION_ID, buildNotification(-1));
+        startForeground(NOTIFICATION_ID, buildNotification(null));
 
         for(OnStateChangeListener l : stateListeners) {
             l.recordingStarted();
@@ -234,7 +234,30 @@ public class RecordingService extends Service {
         }
     }
 
-    private class RecordTask extends AsyncTask<Void, Float, Sound> {
+    public class Progress {
+        int channels = 0;
+        long samples = 0;
+        int sampleRate = 0;
+        String title = null;
+        OffsetDateTime time = null;
+        MetadataTemplate template = null;
+
+        private Progress(MetadataTemplate template, OffsetDateTime time,
+                int sampleRate, long samples, int channels) {
+            this.title = title;
+            this.time = time;
+            this.samples = samples;
+            this.sampleRate = sampleRate;
+            this.channels = channels;
+        }
+
+        public float getSeconds() {
+            return Utils.samplesAndSampleRateToSeconds(
+                    samples, sampleRate, channels);
+        }
+    }
+
+    private class RecordTask extends AsyncTask<Void, Progress, Sound> {
         private MetadataTemplate template = null;
         private File takesDir = null;
 
@@ -334,7 +357,6 @@ public class RecordingService extends Service {
 
             // TODO: make the chunk size configurable
             short[] samples = new short[1024*channels];
-            float seconds = 0;
             long samples_captured = 0, samples_encoded = 0;
             while(!stopping.get()) {
                 int r = recorder.read(samples, 0, samples.length,
@@ -360,12 +382,12 @@ public class RecordingService extends Service {
                     samples_encoded += r * channels;
                 }
 
-                seconds += (float)r / (channels * sampleRate);
-                publishProgress(seconds);
+                publishProgress(new Progress(template, time,
+                            sampleRate, samples_encoded, channels));
 
                 Log.d(TAG, String.format(
-                    "recording: duration=%.2fs, samples captured=%d encoded=%d",
-                    seconds, samples_captured, samples_encoded));
+                    "recording: samples captured=%d encoded=%d",
+                    samples_captured, samples_encoded));
             }
 
             try {
@@ -391,9 +413,10 @@ public class RecordingService extends Service {
                 throw new RuntimeException("can't close output stream", e);
             }
 
+            float seconds = Utils.samplesAndSampleRateToSeconds(
+                    samples_encoded, sampleRate, channels);
             Log.i(TAG, String.format("finished recording (%.2fs): %s",
                         seconds, path));
-
             return template.renderLocalFile(path, time, seconds);
         }
 
@@ -403,13 +426,13 @@ public class RecordingService extends Service {
         }
 
         @Override
-        protected void onProgressUpdate(Float... values) {
-            float seconds = values[0];
+        protected void onProgressUpdate(Progress... values) {
+            Progress p = values[0];
 
-            nm.notify(NOTIFICATION_ID, buildNotification(seconds));
+            nm.notify(NOTIFICATION_ID, buildNotification(p));
 
             for(OnProgressListener l : progressListeners) {
-                l.recordingProgress(seconds);
+                l.recordingProgress(p);
             }
         }
     }

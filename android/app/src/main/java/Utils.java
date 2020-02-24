@@ -44,4 +44,12 @@ public class Utils {
         ms -= h*3600000 + m*60000 + s*1000;
         return String.format("%d:%02d:%02d.%03d", h, m, s, ms);
     }
+
+    public static float samplesAndSampleRateToSeconds(
+            long samples, int sampleRate, int channels) {
+        return new BigDecimal(samples)
+            .divide(new BigDecimal(channels))
+            .divide(new BigDecimal(sampleRate), 9, RoundingMode.HALF_UP)
+            .floatValue();
+    }
 }
