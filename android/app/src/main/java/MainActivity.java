@@ -80,14 +80,12 @@ public class MainActivity extends Activity implements
         }
     };
 
-    private TextView status_text = null;
     private ExtendedFloatingActionButton fab = null;
 
     private SoundsAdapter sa = new SoundsAdapter();
     private SoundItem active_sound = null;
 
     private AmazonS3Client s3 = null;
-    private String bucket = "rootmos-sounds";
 
     private Settings settings = new Settings(this);
 
@@ -96,8 +94,6 @@ public class MainActivity extends Activity implements
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         Log.i(TAG, "creating main activity");
-
-        status_text = (TextView)findViewById(R.id.status);
 
         ((ListView)findViewById(R.id.sounds)).setAdapter(sa);
 
@@ -110,8 +106,8 @@ public class MainActivity extends Activity implements
             }
         });
 
-        Region r = Region.getRegion("eu-central-1");
-        s3 = new AmazonS3Client(AWSAuth.getAuth(), r);
+        s3 = new AmazonS3Client(AWSAuth.getAuth(),
+                Region.getRegion(settings.getBucketRegion()));
     }
 
     @Override
@@ -224,7 +220,7 @@ public class MainActivity extends Activity implements
             }
 
             List<S3ObjectSummary> ol =
-                s3.listObjects(bucket).getObjectSummaries();
+                s3.listObjects(settings.getBucketName()).getObjectSummaries();
             for(S3ObjectSummary os : ol) {
                 if(!os.getKey().endsWith(".json")) continue;
 
@@ -537,6 +533,7 @@ public class MainActivity extends Activity implements
                 Sound s = si.getSound();
                 Path r = settings.getBaseDir().toPath()
                     .relativize(s.getLocal().toPath().getParent());
+                String bucket = settings.getBucketName();
                 String key = r.toString() + "/" + s.getFilename();
                 Log.d(TAG, String.format("uploading: s3://%s/%s", bucket, key));
                 s.setURI(Uri.parse(s3.getResourceUrl(bucket, key)));

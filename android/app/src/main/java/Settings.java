@@ -28,4 +28,12 @@ class Settings {
         cache.mkdirs();
         return cache;
     }
+
+    public String getBucketName() {
+        return "rootmos-sounds";
+    }
+
+    public String getBucketRegion() {
+        return "eu-central-1";
+    }
 }
