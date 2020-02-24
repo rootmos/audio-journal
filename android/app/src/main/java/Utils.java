@@ -1,5 +1,8 @@
 package io.rootmos.audiojournal;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.IOException;
@@ -17,7 +20,8 @@ public class Utils {
     }
 
     public static String formatDuration(float seconds) {
-        int s = (int)seconds;
+        int s = new BigDecimal(seconds).setScale(0, RoundingMode.HALF_UP)
+            .intValue();
         int m = s/60;
         int h = m/60;
         m -= h*60;
@@ -27,5 +31,17 @@ public class Utils {
         } else {
             return String.format("%d:%02d:%02d", h, m, s);
         }
+    }
+
+    public static String formatDurationLong(float seconds) {
+        int ms = new BigDecimal(seconds*1000).setScale(3, RoundingMode.HALF_UP)
+            .intValue();
+        int s = ms/1000;
+        int m = s/60;
+        int h = m/60;
+        m -= h*60;
+        s -= h*3600 + m*60;
+        ms -= h*3600000 + m*60000 + s*1000;
+        return String.format("%d:%02d:%02d.%03d", h, m, s, ms);
     }
 }

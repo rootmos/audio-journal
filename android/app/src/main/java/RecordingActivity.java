@@ -54,8 +54,7 @@ public class RecordingActivity extends Activity implements
     };
 
     public void recordingProgress(float s) {
-        status_text.setText(String.format("Recording: %s",
-                    Utils.formatDuration(s)));
+        status_text.setText(Utils.formatDurationLong(s));
     }
 
     @Override
@@ -66,6 +65,8 @@ public class RecordingActivity extends Activity implements
         setContentView(R.layout.activity_recording);
 
         status_text = (TextView)findViewById(R.id.status);
+        status_text.setAutoSizeTextTypeWithDefaults(
+                TextView.AUTO_SIZE_TEXT_TYPE_UNIFORM);
 
         start_button = (Button)findViewById(R.id.start_recording);
         start_button.setOnClickListener(new View.OnClickListener() {
