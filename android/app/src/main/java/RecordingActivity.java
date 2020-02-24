@@ -18,7 +18,7 @@ import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
-
+import android.widget.ProgressBar;
 
 import androidx.core.app.ActivityCompat;
 
@@ -27,8 +27,13 @@ public class RecordingActivity extends Activity implements
     RecordingService.OnStateChangeListener {
 
     private TextView status_text = null;
+    private TextView clipped_samples = null;
+    private View recordingMetadata = null;
     private Button start_button = null;
     private Button stop_button = null;
+
+    private ProgressBar currentGain = null;
+    private ProgressBar maxGain = null;
 
     private Set<String> granted_permissions = new HashSet<>();
 
@@ -53,10 +58,6 @@ public class RecordingActivity extends Activity implements
         }
     };
 
-    public void recordingProgress(RecordingService.Progress p) {
-        status_text.setText(Utils.formatDurationLong(p.getSeconds()));
-    }
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -67,6 +68,8 @@ public class RecordingActivity extends Activity implements
         status_text = (TextView)findViewById(R.id.status);
         status_text.setAutoSizeTextTypeWithDefaults(
                 TextView.AUTO_SIZE_TEXT_TYPE_UNIFORM);
+
+        clipped_samples = (TextView)findViewById(R.id.clipped_samples);
 
         start_button = (Button)findViewById(R.id.start_recording);
         start_button.setOnClickListener(new View.OnClickListener() {
@@ -87,6 +90,11 @@ public class RecordingActivity extends Activity implements
                 rs.stop();
             }
         });
+
+        currentGain = (ProgressBar)findViewById(R.id.current_gain);
+        maxGain = (ProgressBar)findViewById(R.id.max_gain);
+
+        recordingMetadata = findViewById(R.id.recording_metadata);
     }
 
     @Override
@@ -139,6 +147,14 @@ public class RecordingActivity extends Activity implements
     }
 
     @Override
+    public void recordingProgress(RecordingService.Progress p) {
+        status_text.setText(Utils.formatDurationLong(p.getSeconds()));
+        currentGain.setProgress(p.getGainPercent());
+        maxGain.setProgress(p.getMaxGainPercent());
+        clipped_samples.setText(String.format("%d", p.getClippedSamples()));
+    }
+
+    @Override
     public void recordingStarted() {
         applyRecordingState();
     }
@@ -153,9 +169,11 @@ public class RecordingActivity extends Activity implements
     public void applyRecordingState() {
         Log.d(TAG, "applying recording state: " + rs.isRecording());
         if(rs.isRecording()) {
+            recordingMetadata.setVisibility(View.VISIBLE);
             start_button.setVisibility(View.GONE);
             stop_button.setVisibility(View.VISIBLE);
         } else {
+            recordingMetadata.setVisibility(View.INVISIBLE);
             start_button.setVisibility(View.VISIBLE);
             stop_button.setVisibility(View.GONE);
         }

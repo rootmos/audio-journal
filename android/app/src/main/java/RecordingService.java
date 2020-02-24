@@ -4,12 +4,14 @@ import static io.rootmos.audiojournal.Common.TAG;
 
 import java.io.File;
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.ArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
-import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import android.app.Service;
 import android.os.IBinder;
@@ -237,24 +239,51 @@ public class RecordingService extends Service {
     public class Progress {
         int channels = 0;
         long samples = 0;
+        long clipped = 0;
         int sampleRate = 0;
+
+        short max = 0;
+        short cur = 0;
+
         String title = null;
         OffsetDateTime time = null;
         MetadataTemplate template = null;
 
         private Progress(MetadataTemplate template, OffsetDateTime time,
-                int sampleRate, long samples, int channels) {
+                int sampleRate, long samples, long clipped, int channels,
+                short max, short cur) {
             this.title = title;
             this.time = time;
             this.samples = samples;
             this.sampleRate = sampleRate;
+            this.clipped = clipped;
             this.channels = channels;
+            this.max = max;
+            this.cur = cur;
         }
 
         public float getSeconds() {
             return Utils.samplesAndSampleRateToSeconds(
                     samples, sampleRate, channels);
         }
+
+        public int getMaxGainPercent() {
+            BigDecimal range = new BigDecimal(Short.MAX_VALUE);
+            return new BigDecimal(max)
+                .multiply(new BigDecimal(100))
+                .divide(range, 0, RoundingMode.HALF_UP)
+                .intValue();
+        }
+
+        public int getGainPercent() {
+            BigDecimal range = new BigDecimal(Short.MAX_VALUE);
+            return new BigDecimal(cur)
+                .multiply(new BigDecimal(100))
+                .divide(range, 0, RoundingMode.HALF_UP)
+                .intValue();
+        }
+
+        public long getClippedSamples() { return clipped; }
     }
 
     private class RecordTask extends AsyncTask<Void, Progress, Sound> {
@@ -357,7 +386,8 @@ public class RecordingService extends Service {
 
             // TODO: make the chunk size configurable
             short[] samples = new short[1024*channels];
-            long samples_captured = 0, samples_encoded = 0;
+            short max = 0;
+            long samples_captured = 0, samples_encoded = 0, samples_clipped = 0;
             while(!stopping.get()) {
                 int r = recorder.read(samples, 0, samples.length,
                         AudioRecord.READ_BLOCKING);
@@ -366,10 +396,16 @@ public class RecordingService extends Service {
                 }
                 samples_captured += r;
 
+                long sum = 0;
+                short cur = 0;
                 int[] is = new int[r];
                 for(int i = 0; i < r; ++i) {
+                    short n = (short)Math.abs(samples[i]);
+                    if(n == Short.MAX_VALUE) samples_clipped++;
+                    if(cur < n) cur = n;
                     is[i] = samples[i];
                 }
+                if(max < cur) max = cur;
                 encoder.addSamples(is, is.length/channels);
 
                 int enc;
@@ -382,12 +418,14 @@ public class RecordingService extends Service {
                     samples_encoded += r * channels;
                 }
 
-                publishProgress(new Progress(template, time,
-                            sampleRate, samples_encoded, channels));
+                Progress p = new Progress(template, time,
+                        sampleRate, samples_encoded, samples_clipped, channels,
+                        max, cur);
+                publishProgress(p);
 
                 Log.d(TAG, String.format(
-                    "recording: samples captured=%d encoded=%d",
-                    samples_captured, samples_encoded));
+                    "recording: samples captured=%d encoded=%d, cur=%d, max=%d",
+                    samples_captured, samples_encoded, cur, max));
             }
 
             try {
