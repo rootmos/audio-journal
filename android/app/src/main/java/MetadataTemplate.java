@@ -28,7 +28,6 @@ class MetadataTemplate implements Parcelable {
 
     private Path prefix = null;
     private String filename = null;
-
     private String suffix = null;
 
     public MetadataTemplate(
@@ -41,6 +40,7 @@ class MetadataTemplate implements Parcelable {
 
     public String getTitle() { return title; }
     public String getSuffix() { return suffix; }
+    public Path getPrefix() { return prefix; }
 
     public void setPrefix(Path prefix) { this.prefix = prefix; }
     public void setFilename(String filename) { this.filename = filename; }

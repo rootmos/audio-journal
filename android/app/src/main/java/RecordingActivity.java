@@ -70,6 +70,11 @@ public class RecordingActivity extends Activity implements
 
         binding.status.titleTemplateValue.setText(template.getTitle());
 
+        if(template.getPrefix() != null) {
+            binding.status.prefixValue.setText(template.getPrefix().toString());
+            binding.status.prefix.setVisibility(View.VISIBLE);
+        }
+
         binding.start.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 RecordingService.start(RecordingActivity.this, template,

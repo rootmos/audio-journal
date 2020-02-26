@@ -13,4 +13,5 @@
     <string name="clipped_samples_label">Clipped samples:</string>
     <string name="title_label">Title:</string>
     <string name="title_template_label">Title template:</string>
+    <string name="prefix_label">Prefix:</string>
 </resources>
