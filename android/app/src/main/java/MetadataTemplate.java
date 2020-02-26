@@ -7,9 +7,9 @@ import android.os.Parcel;
 import android.os.Parcelable;
 import android.util.Log;
 
-import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -26,7 +26,7 @@ class MetadataTemplate implements Parcelable {
     private String artist = null;
     private String composer = null;
 
-    private File dir = null;
+    private Path prefix = null;
     private String filename = null;
 
     private String suffix = null;
@@ -40,8 +40,9 @@ class MetadataTemplate implements Parcelable {
     }
 
     public String getTitle() { return title; }
+    public String getSuffix() { return suffix; }
 
-    public void setTargetDir(File dir) { this.dir = dir; }
+    public void setPrefix(Path prefix) { this.prefix = prefix; }
     public void setFilename(String filename) { this.filename = filename; }
 
     @Override
@@ -53,7 +54,7 @@ class MetadataTemplate implements Parcelable {
         out.writeString(artist);
         out.writeString(composer);
         out.writeString(suffix);
-        out.writeString(dir != null ? dir.toString() : null);
+        out.writeString(prefix != null ? prefix.toString() : null);
         out.writeString(filename != null ? filename.toString() : null);
     }
 
@@ -65,8 +66,8 @@ class MetadataTemplate implements Parcelable {
                         in.readString(),
                         in.readString(),
                         in.readString());
-                String dir = in.readString();
-                if(dir != null) mt.setTargetDir(new File(dir));
+                String prefix = in.readString();
+                if(prefix != null) mt.setPrefix(Paths.get(prefix));
                 mt.setFilename(in.readString());
                 return mt;
             }
@@ -97,27 +98,38 @@ class MetadataTemplate implements Parcelable {
         return renderString(this.title, time, null);
     }
 
-    public Sound renderLocalFile(File path, OffsetDateTime time, float length) {
+    public Sound renderLocalFile(Path dest, Path src,
+            OffsetDateTime time, float length) {
         try {
             String title = renderTitle(time);
             Log.d(TAG, String.format("rendered title: %s", title));
 
-            if(dir != null) {
-                File dest = filename == null
-                    ? new File(dir, path.getName())
-                    : new File(dir, renderString(filename, time, title));
+            if(dest != null) {
+                if(prefix != null) {
+                    dest = dest.resolve(prefix);
+                }
 
-                dir.mkdirs();
+                if(filename == null) {
+                    dest = dest.resolve(src.getFileName());
+                } else {
+                    dest = dest.resolve(renderString(filename, time, title));
+                }
 
-                Log.i(TAG, String.format("copying: %s -> %s", path, dest));
+                if(dest.getParent() != null) {
+                    Files.createDirectories(dest.getParent());
+                }
 
-                path = Files.copy(path.toPath(), dest.toPath()).toFile();
+                Log.i(TAG, String.format("copying: %s -> %s", src, dest));
+
+                dest = Files.copy(src, dest);
+            } else {
+                dest = src;
             }
 
             byte[] sha1 = new DigestUtils(MessageDigestAlgorithms.SHA_1)
-                .digest(path);
+                .digest(dest);
 
-            AudioFile af = AudioFileIO.read(path);
+            AudioFile af = AudioFileIO.read(dest.toFile());
             Tag t = af.getTag();
             t.setField(FieldKey.TITLE, title);
             t.setField(FieldKey.ARTIST, artist);
@@ -125,22 +137,23 @@ class MetadataTemplate implements Parcelable {
             t.setField(FieldKey.YEAR,
                     time.format(DateTimeFormatter.ofPattern("y")));
             af.commit();
-            Log.d(TAG, String.format("tagged: %s", path));
+            Log.d(TAG, String.format("tagged: %s", dest));
 
             Sound s = new Sound(title, artist, composer, sha1, length);
-            s.setLocal(path);
+            s.setLocal(dest);
             s.setDateTime(time);
 
-            File m = new File(path.getParentFile(), path.getName().replaceAll(
-                        String.format("%s$", suffix), ".json"));
+            Path m = dest.resolveSibling(dest.getFileName().toString()
+                    .replaceAll(String.format("%s$", suffix), ".json"));
+            s.setMetadata(m);
 
-            Files.write(m.toPath(), s.toJSON().getBytes("UTF-8"));
+            Files.write(m, s.toJSON().getBytes("UTF-8"));
             Log.d(TAG, "metadata written to: " + m);
 
             return s;
         } catch(Exception e) {
             throw new RuntimeException(
-                    "exception while rendering local file: " + path, e);
+                    "exception while rendering local file: " + dest, e);
         }
     }
 }

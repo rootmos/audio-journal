@@ -4,10 +4,11 @@ import static io.rootmos.audiojournal.Common.TAG;
 import io.rootmos.audiojournal.databinding.ActivityRecordingBinding;
 
 import java.io.File;
+import java.nio.file.Paths;
+import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
-import java.time.format.DateTimeFormatter;
 
 import android.Manifest;
 import android.app.Activity;
@@ -64,15 +65,16 @@ public class RecordingActivity extends Activity implements
 
         final MetadataTemplate template = new MetadataTemplate(
                 "Session @ %t", "rootmos", "Gustav Behm", ".flac");
-        template.setTargetDir(new File(settings.getBaseDir(), "sessions"));
+        template.setPrefix(Paths.get("sessions"));
         template.setFilename("%t%s");
 
         binding.status.titleTemplateValue.setText(template.getTitle());
 
         binding.start.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                RecordingService.start(RecordingActivity.this,
-                        template, settings.getTakesDir());
+                RecordingService.start(RecordingActivity.this, template,
+                        settings.getBaseDir(),
+                        settings.getTakesDir());
             }
         });
 

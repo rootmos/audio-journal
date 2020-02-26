@@ -2,10 +2,12 @@ package io.rootmos.audiojournal;
 
 import static io.rootmos.audiojournal.Common.TAG;
 
-import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -100,10 +102,11 @@ public class RecordingService extends Service {
     }
 
     public static void start(Context ctx,
-            MetadataTemplate template, File takesDir) {
+            MetadataTemplate template, Path destDir, Path takesDir) {
         Intent i = new Intent(ctx, RecordingService.class);
         i.putExtra("action", "start");
         i.putExtra("metadatTemplate", template);
+        i.putExtra("destDir", destDir.toString());
         i.putExtra("takesDir", takesDir.toString());
 
         if(ctx.startService(i) == null) {
@@ -139,8 +142,9 @@ public class RecordingService extends Service {
         if(action.equals("boot")) {
         } else if(action.equals("start")) {
             MetadataTemplate mt = intent.getParcelableExtra("metadatTemplate");
-            File takesDir = new File(intent.getStringExtra("takesDir"));
-            record(mt, takesDir);
+            Path destDir = Paths.get(intent.getStringExtra("destDir"));
+            Path takesDir = Paths.get(intent.getStringExtra("takesDir"));
+            record(mt, destDir, takesDir);
         } else if(action.equals("stop")) {
             stop();
         } else {
@@ -197,13 +201,14 @@ public class RecordingService extends Service {
         return b.build();
     }
 
-    private boolean record(MetadataTemplate template, File takesDir) {
+    private boolean record(MetadataTemplate template,
+            Path destDir, Path takesDir) {
         if(recordTask != null) {
             Log.e(TAG, "trying to start new recording while already recording");
             return false;
         }
 
-        recordTask = new RecordTask(template, takesDir);
+        recordTask = new RecordTask(template, destDir, takesDir);
         recordTask.executeOnExecutor(ex);
 
         startForeground(NOTIFICATION_ID, buildNotification(null));
@@ -294,19 +299,21 @@ public class RecordingService extends Service {
 
     private class RecordTask extends AsyncTask<Void, Progress, Sound> {
         private MetadataTemplate template = null;
-        private File takesDir = null;
+        private Path destDir = null;
+        private Path takesDir = null;
 
         private AudioRecord recorder = null;
         private FLACEncoder encoder = null;
         private FLACFileOutputStream out = null;
-        private File path = null;
+        private Path path = null;
         private OffsetDateTime time = null;
         private AtomicBoolean stopping = new AtomicBoolean(false);
 
         public void stop() { stopping.set(true); }
 
-        public RecordTask(MetadataTemplate template, File takesDir) {
+        public RecordTask(MetadataTemplate template, Path destDir, Path takesDir) {
             this.template = template;
+            this.destDir = destDir;
             this.takesDir = takesDir;
         }
 
@@ -366,12 +373,12 @@ public class RecordingService extends Service {
             time = OffsetDateTime.now();
 
             String fn = time.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
-                + ".flac";
-            path = new File(takesDir, fn);
+                + template.getSuffix();
+            path = takesDir.resolve(fn);
             try {
-                takesDir.mkdirs();
+                Files.createDirectories(takesDir);
 
-                out = new FLACFileOutputStream(path);
+                out = new FLACFileOutputStream(path.toFile());
                 if(!out.isValid()) {
                     throw new RuntimeException("can't open output stream");
                 }
@@ -466,7 +473,7 @@ public class RecordingService extends Service {
                     samples_encoded, sampleRate, channels);
             Log.i(TAG, String.format("finished recording (%.2fs): %s",
                         seconds, path));
-            return template.renderLocalFile(path, time, seconds);
+            return template.renderLocalFile(destDir, path, time, seconds);
         }
 
         @Override

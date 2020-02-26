@@ -5,7 +5,6 @@ import static io.rootmos.audiojournal.Common.TAG;
 import android.net.Uri;
 import android.util.Log;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.FileInputStream;
@@ -40,8 +39,8 @@ class Sound implements Comparable<Sound> {
     private String filename = null;
 
     private Uri uri = null;
-    private File local = null;
-    private File metadata = null;
+    private Path local = null;
+    private Path metadata = null;
 
     private OffsetDateTime datetime = null;
     private LocalDate date = null;
@@ -60,13 +59,9 @@ class Sound implements Comparable<Sound> {
         date = dt.toLocalDate();
     }
 
-    public void setLocal(File path) {
-        this.local = path;
-    }
-
-    public void setURI(Uri uri) {
-        this.uri = uri;
-    }
+    public void setLocal(Path  path) { this.local = path; }
+    public void setURI(Uri uri) { this.uri = uri; }
+    public void setMetadata(Path metadata) { this.metadata = metadata; }
 
     public String getTitle() { return title; }
     public String getArtist() { return artist; }
@@ -76,9 +71,9 @@ class Sound implements Comparable<Sound> {
     public LocalDate getDate() { return date; }
     public byte[] getSHA1() { return sha1; }
     public Uri getURI() { return uri; }
-    public File getLocal() { return local; }
+    public Path getLocal() { return local; }
     public String getFilename() { return filename; }
-    public File getMetadata() { return metadata; }
+    public Path getMetadata() { return metadata; }
 
     public int hashCode() {
         return ByteBuffer.wrap(sha1).getInt();
@@ -111,21 +106,20 @@ class Sound implements Comparable<Sound> {
         if(o.metadata != null) metadata = o.metadata;
     }
 
-    static public List<Sound> scanDir(File d) {
+    static public List<Sound> scanDir(Path d) {
         final ArrayList<Sound> ss = new ArrayList<>();
         try {
-            Files.walkFileTree(d.toPath(),
-                new SimpleFileVisitor<Path>() {
-                    @Override
-                    public FileVisitResult visitFile(Path p,
-                            BasicFileAttributes attrs) throws IOException {
-                        Log.d(TAG, "considering: " + p);
-                        if(p.toFile().getName().endsWith(".json")) {
-                            ss.add(fromLocalFile(p.toFile()));
-                        }
-                        return FileVisitResult.CONTINUE;
+            Files.walkFileTree(d, new SimpleFileVisitor<Path>() {
+                @Override
+                public FileVisitResult visitFile(Path p,
+                        BasicFileAttributes attrs) throws IOException {
+                    Log.d(TAG, "considering: " + p);
+                    if(p.toFile().getName().endsWith(".json")) {
+                        ss.add(fromLocalFile(p));
                     }
-                });
+                    return FileVisitResult.CONTINUE;
+                }
+            });
         } catch(IOException e) {
             Log.e(TAG, "exception while scanning: " + d, e);
             return null;
@@ -133,12 +127,12 @@ class Sound implements Comparable<Sound> {
         return ss;
     }
 
-    static public Sound fromLocalFile(File m) throws FileNotFoundException {
+    static public Sound fromLocalFile(Path m) throws FileNotFoundException {
         Log.d(TAG, "reading local metadata: " + m);
-        Sound s = fromInputStream(new FileInputStream(m));
+        Sound s = fromInputStream(new FileInputStream(m.toFile()));
         s.metadata = m;
-        File p = new File(m.getParent(), s.filename);
-        if(p.exists()) {
+        Path p = m.getParent().resolve(s.filename);
+        if(Files.exists(p)) {
             s.local = p;
         } else {
             Log.w(TAG, "corresponding audio file not found: " + p);
@@ -210,7 +204,7 @@ class Sound implements Comparable<Sound> {
             j.put("sha1", Hex.encodeHexString(sha1));
             j.put("url", uri != null ? uri.toString() : JSONObject.NULL);
             if(local != null) {
-                j.put("filename", local.getName());
+                j.put("filename", local.getFileName());
             } else if(filename != null) {
                 j.put("filename", filename);
             }

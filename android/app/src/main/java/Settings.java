@@ -1,6 +1,9 @@
 package io.rootmos.audiojournal;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Files;
 
 import android.content.Context;
 
@@ -11,21 +14,25 @@ class Settings {
         this.ctx = ctx;
     }
 
-    public File getBaseDir() {
+    public Path getBaseDir() {
         File[] rs = ctx.getExternalMediaDirs();
         if(rs.length == 0) {
             throw new RuntimeException("no media dirs");
         }
-        return rs[0];
+        return rs[0].toPath();
     }
 
-    public File getTakesDir() {
-        return new File(getBaseDir(), "takes");
+    public Path getTakesDir() {
+        return getBaseDir().resolve("takes");
     }
 
-    public File getUpstreamCacheDir() {
-        File cache = new File(ctx.getCacheDir(), "upstream");
-        cache.mkdirs();
+    public Path getUpstreamCacheDir() {
+        Path cache = ctx.getCacheDir().toPath().resolve("upstream");
+        try {
+            Files.createDirectories(cache);
+        } catch(IOException e) {
+            throw new RuntimeException("unable to create cache", e);
+        }
         return cache;
     }
 

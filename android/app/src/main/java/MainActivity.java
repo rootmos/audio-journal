@@ -2,10 +2,10 @@ package io.rootmos.audiojournal;
 
 import static io.rootmos.audiojournal.Common.TAG;
 
-import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
@@ -224,22 +224,21 @@ public class MainActivity extends Activity implements
             for(S3ObjectSummary os : ol) {
                 if(!os.getKey().endsWith(".json")) continue;
 
-                File f = new File(settings.getUpstreamCacheDir(), os.getETag());
-                if(!f.exists()) {
+                Path f = settings.getUpstreamCacheDir().resolve(os.getETag());
+                if(!Files.exists(f)) {
                     Log.d(TAG, String.format(
                                 "fetching metadata: s3://%s/%s etag=%s",
                                 os.getBucketName(), os.getKey(), os.getETag()));
                     s3.getObject(new GetObjectRequest(
-                                os.getBucketName(), os.getKey()), f);
+                                os.getBucketName(), os.getKey()), f.toFile());
                 } else {
                     Log.d(TAG, String.format(
                                 "using cached metadata: s3://%s/%s etag=%s",
                                 os.getBucketName(), os.getKey(), os.getETag()));
                 }
 
-
                 try {
-                    FileInputStream is = new FileInputStream(f);
+                    FileInputStream is = new FileInputStream(f.toFile());
                     Sound s = Sound.fromInputStream(is);
                     is.close();
                     ss.add(s);
@@ -360,7 +359,7 @@ public class MainActivity extends Activity implements
 
             try {
                 if(s.getLocal() != null) {
-                    is = new FileInputStream(s.getLocal());
+                    is = new FileInputStream(s.getLocal().toFile());
                     Log.d(TAG, "using local data source: " + s.getLocal());
                     player.setDataSource(is.getFD());
                 } else if(s.getURI() != null) {
@@ -531,17 +530,18 @@ public class MainActivity extends Activity implements
         protected Boolean doInBackground(SoundItem... ss) {
             for(SoundItem si : ss) {
                 Sound s = si.getSound();
-                Path r = settings.getBaseDir().toPath()
-                    .relativize(s.getLocal().toPath().getParent());
+                // TODO: use prefix?
+                Path r = settings.getBaseDir()
+                    .relativize(s.getLocal().getParent());
                 String bucket = settings.getBucketName();
                 String key = r.toString() + "/" + s.getFilename();
                 Log.d(TAG, String.format("uploading: s3://%s/%s", bucket, key));
                 s.setURI(Uri.parse(s3.getResourceUrl(bucket, key)));
-                s3.putObject(bucket, key, s.getLocal());
+                s3.putObject(bucket, key, s.getLocal().toFile());
                 s3.setObjectAcl(bucket, key,
                         CannedAccessControlList.PublicRead);
 
-                key = r.toString() + "/" + s.getMetadata().getName();
+                key = r.toString() + "/" + s.getMetadata().getFileName();
                 Log.d(TAG, String.format("uploading: s3://%s/%s", bucket, key));
                 Log.d(TAG, s.toJSON());
                 s3.putObject(bucket, key, s.toJSON());
