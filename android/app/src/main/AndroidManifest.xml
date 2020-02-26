@@ -8,7 +8,7 @@
     <application
         android:label="AudioJournal"
         android:theme="@style/Theme.MaterialComponents.Light"
-        android:icon="@drawable/audio_journal"
+        android:icon="@mipmap/audio_journal"
         android:allowBackup="false">
         <activity android:name=".MainActivity">
             <intent-filter>
