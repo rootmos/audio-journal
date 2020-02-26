@@ -123,7 +123,7 @@ class MetadataTemplate implements Parcelable {
             t.setField(FieldKey.ARTIST, artist);
             t.setField(FieldKey.COMPOSER, composer);
             t.setField(FieldKey.YEAR,
-                    time.format(DateTimeFormatter.ofPattern("%y")));
+                    time.format(DateTimeFormatter.ofPattern("y")));
             af.commit();
             Log.d(TAG, String.format("tagged: %s", path));
 
