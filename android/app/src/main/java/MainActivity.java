@@ -135,7 +135,7 @@ public class MainActivity extends Activity implements
     }
 
     @Override
-    public void recordingStarted() {
+    public void recordingStarted(RecordingService.Started started) {
         applyRecordingState();
     }
 

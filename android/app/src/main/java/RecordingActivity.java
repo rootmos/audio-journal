@@ -1,11 +1,13 @@
 package io.rootmos.audiojournal;
 
 import static io.rootmos.audiojournal.Common.TAG;
+import io.rootmos.audiojournal.databinding.ActivityRecordingBinding;
 
 import java.io.File;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
+import java.time.format.DateTimeFormatter;
 
 import android.Manifest;
 import android.app.Activity;
@@ -16,9 +18,7 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.util.Log;
 import android.view.View;
-import android.widget.Button;
 import android.widget.TextView;
-import android.widget.ProgressBar;
 
 import androidx.core.app.ActivityCompat;
 
@@ -26,14 +26,7 @@ public class RecordingActivity extends Activity implements
     RecordingService.OnProgressListener,
     RecordingService.OnStateChangeListener {
 
-    private TextView status_text = null;
-    private TextView clipped_samples = null;
-    private View recordingMetadata = null;
-    private Button start_button = null;
-    private Button stop_button = null;
-
-    private ProgressBar currentGain = null;
-    private ProgressBar maxGain = null;
+    private ActivityRecordingBinding binding = null;
 
     private Set<String> granted_permissions = new HashSet<>();
 
@@ -63,38 +56,31 @@ public class RecordingActivity extends Activity implements
         super.onCreate(savedInstanceState);
         Log.i(TAG, "creating recording activity");
 
-        setContentView(R.layout.activity_recording);
+        binding = ActivityRecordingBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
 
-        status_text = (TextView)findViewById(R.id.status);
-        status_text.setAutoSizeTextTypeWithDefaults(
+        binding.status.duration.setAutoSizeTextTypeWithDefaults(
                 TextView.AUTO_SIZE_TEXT_TYPE_UNIFORM);
 
-        clipped_samples = (TextView)findViewById(R.id.clipped_samples);
+        final MetadataTemplate template = new MetadataTemplate(
+                "Session @ %t", "rootmos", "Gustav Behm", ".flac");
+        template.setTargetDir(new File(settings.getBaseDir(), "sessions"));
+        template.setFilename("%t%s");
 
-        start_button = (Button)findViewById(R.id.start_recording);
-        start_button.setOnClickListener(new View.OnClickListener() {
+        binding.status.titleTemplateValue.setText(template.getTitle());
+
+        binding.start.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                MetadataTemplate template = new MetadataTemplate(
-                        "Session @ %t", "rootmos", "Gustav Behm", ".flac");
-                template.setTargetDir(new File(settings.getBaseDir(), "sessions"));
-                template.setFilename("%t%s");
-
                 RecordingService.start(RecordingActivity.this,
                         template, settings.getTakesDir());
             }
         });
 
-        stop_button = (Button)findViewById(R.id.stop_recording);
-        stop_button.setOnClickListener(new View.OnClickListener() {
+        binding.stop.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 rs.stop();
             }
         });
-
-        currentGain = (ProgressBar)findViewById(R.id.current_gain);
-        maxGain = (ProgressBar)findViewById(R.id.max_gain);
-
-        recordingMetadata = findViewById(R.id.recording_metadata);
     }
 
     @Override
@@ -148,15 +134,24 @@ public class RecordingActivity extends Activity implements
 
     @Override
     public void recordingProgress(RecordingService.Progress p) {
-        status_text.setText(Utils.formatDurationLong(p.getSeconds()));
-        currentGain.setProgress(p.getGainPercent());
-        maxGain.setProgress(p.getMaxGainPercent());
-        clipped_samples.setText(String.format("%d", p.getClippedSamples()));
+        binding.status.duration.setText(
+                Utils.formatDurationLong(p.getSeconds()));
+        binding.status.currentGain.setProgress(p.getGainPercent());
+        binding.status.maxGain.setProgress(p.getMaxGainPercent());
+        binding.status.clippedSamplesValue.setText(
+                String.format("%d", p.getClippedSamples()));
     }
 
     @Override
-    public void recordingStarted() {
+    public void recordingStarted(RecordingService.Started started) {
         applyRecordingState();
+
+        binding.status.titleValue.setText(started.getTitle());
+        binding.status.title.setVisibility(View.VISIBLE);
+
+        binding.status.dateValue.setText(started.getTime().withNano(0)
+                .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
+        binding.status.date.setVisibility(View.VISIBLE);
     }
 
     @Override
@@ -169,13 +164,16 @@ public class RecordingActivity extends Activity implements
     public void applyRecordingState() {
         Log.d(TAG, "applying recording state: " + rs.isRecording());
         if(rs.isRecording()) {
-            recordingMetadata.setVisibility(View.VISIBLE);
-            start_button.setVisibility(View.GONE);
-            stop_button.setVisibility(View.VISIBLE);
+            binding.status.clippedSamples.setVisibility(View.VISIBLE);
+            binding.status.titleTemplate.setVisibility(View.GONE);
+            binding.start.setVisibility(View.GONE);
+            binding.stop.setVisibility(View.VISIBLE);
         } else {
-            recordingMetadata.setVisibility(View.INVISIBLE);
-            start_button.setVisibility(View.VISIBLE);
-            stop_button.setVisibility(View.GONE);
+            binding.status.clippedSamples.setVisibility(View.GONE);
+            binding.status.title.setVisibility(View.GONE);
+            binding.status.date.setVisibility(View.GONE);
+            binding.start.setVisibility(View.VISIBLE);
+            binding.stop.setVisibility(View.GONE);
         }
     }
 }

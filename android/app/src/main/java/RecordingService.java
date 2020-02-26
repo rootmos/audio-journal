@@ -46,7 +46,7 @@ public class RecordingService extends Service {
     private ArrayList<OnProgressListener> progressListeners = new ArrayList<>();
 
     public interface OnStateChangeListener {
-        public abstract void recordingStarted();
+        public abstract void recordingStarted(Started started);
         public abstract void recordingCompleted(Sound s);
     }
     private ArrayList<OnStateChangeListener> stateListeners = new ArrayList<>();
@@ -208,10 +208,6 @@ public class RecordingService extends Service {
 
         startForeground(NOTIFICATION_ID, buildNotification(null));
 
-        for(OnStateChangeListener l : stateListeners) {
-            l.recordingStarted();
-        }
-
         return true;
     }
 
@@ -236,6 +232,18 @@ public class RecordingService extends Service {
         }
     }
 
+    public class Started {
+        OffsetDateTime time = null;
+        MetadataTemplate template = null;
+        private Started(MetadataTemplate template, OffsetDateTime time) {
+            this.template = template;
+            this.time = time;
+        }
+
+        public String getTitle() { return template.renderTitle(time); }
+        public OffsetDateTime getTime() { return time; }
+    }
+
     public class Progress {
         int channels = 0;
         long samples = 0;
@@ -245,14 +253,12 @@ public class RecordingService extends Service {
         short max = 0;
         short cur = 0;
 
-        String title = null;
         OffsetDateTime time = null;
         MetadataTemplate template = null;
 
         private Progress(MetadataTemplate template, OffsetDateTime time,
                 int sampleRate, long samples, long clipped, int channels,
                 short max, short cur) {
-            this.title = title;
             this.time = time;
             this.samples = samples;
             this.sampleRate = sampleRate;
@@ -373,6 +379,11 @@ public class RecordingService extends Service {
                 encoder.openFLACStream();
             } catch(IOException e) {
                 throw new RuntimeException("can't open output stream", e);
+            }
+
+            Started s = new Started(template, time);
+            for(OnStateChangeListener l : stateListeners) {
+                l.recordingStarted(s);
             }
         }
 
