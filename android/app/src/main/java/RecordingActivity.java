@@ -110,8 +110,6 @@ public class RecordingActivity extends Activity implements
     }
 
     private void updateTemplate(MetadataTemplate t) {
-        Log.i(TAG, String.format("setting template: hashCode=%d", t.hashCode()));
-
         binding.status.titleTemplateValue.setText(template.getTitle());
         binding.status.formatValue.setText(template.getFormat().toString());
 
