@@ -30,17 +30,52 @@ class MetadataTemplate implements Parcelable {
     private String filename = null;
     private String suffix = null;
 
+    public enum Format {
+        FLAC(1), MP3(2);
+
+        private int v;
+
+        private Format(int v) {
+            this.v = v;
+        }
+
+        private static Format valueOf(int v) {
+            if(v == Format.FLAC.v) {
+                return Format.FLAC;
+            } else if(v == Format.MP3.v) {
+                return Format.MP3;
+            } else {
+                throw new RuntimeException("unsupported format: " + v);
+            }
+        }
+    }
+
+    private Format format = null;
+
     public MetadataTemplate(
-            String title, String artist, String composer, String suffix) {
+            String title, String artist, String composer, Format format) {
         this.title = title;
         this.artist = artist;
         this.composer = composer;
-        this.suffix = suffix;
+
+        this.format = format;
+        this.suffix = selectSuffix(this.format);
+    }
+
+    private String selectSuffix(Format format) {
+        if(format == Format.FLAC) {
+            return ".flac";
+        } else if(format == Format.MP3) {
+            return ".mp3";
+        } else {
+            throw new RuntimeException("unsupported format");
+        }
     }
 
     public String getTitle() { return title; }
     public String getSuffix() { return suffix; }
     public Path getPrefix() { return prefix; }
+    public Format getFormat() { return format; }
 
     public void setPrefix(Path prefix) { this.prefix = prefix; }
     public void setFilename(String filename) { this.filename = filename; }
@@ -53,7 +88,7 @@ class MetadataTemplate implements Parcelable {
         out.writeString(title);
         out.writeString(artist);
         out.writeString(composer);
-        out.writeString(suffix);
+        out.writeInt(format.v);
         out.writeString(prefix != null ? prefix.toString() : null);
         out.writeString(filename != null ? filename.toString() : null);
     }
@@ -65,7 +100,7 @@ class MetadataTemplate implements Parcelable {
                         in.readString(),
                         in.readString(),
                         in.readString(),
-                        in.readString());
+                        Format.valueOf(in.readInt()));
                 String prefix = in.readString();
                 if(prefix != null) mt.setPrefix(Paths.get(prefix));
                 mt.setFilename(in.readString());

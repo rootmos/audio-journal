@@ -34,6 +34,8 @@ import net.sourceforge.javaflacencoder.FLACFileOutputStream;
 import net.sourceforge.javaflacencoder.StreamConfiguration;
 import net.sourceforge.javaflacencoder.EncodingConfiguration;
 
+import com.naman14.androidlame.AndroidLame;
+
 public class RecordingService extends Service {
     private static int NOTIFICATION_ID = 603141;
     private NotificationManager nm = null;
@@ -105,7 +107,7 @@ public class RecordingService extends Service {
             MetadataTemplate template, Path destDir, Path takesDir) {
         Intent i = new Intent(ctx, RecordingService.class);
         i.putExtra("action", "start");
-        i.putExtra("metadatTemplate", template);
+        i.putExtra("metadataTemplate", template);
         i.putExtra("destDir", destDir.toString());
         i.putExtra("takesDir", takesDir.toString());
 
@@ -141,7 +143,7 @@ public class RecordingService extends Service {
 
         if(action.equals("boot")) {
         } else if(action.equals("start")) {
-            MetadataTemplate mt = intent.getParcelableExtra("metadatTemplate");
+            MetadataTemplate mt = intent.getParcelableExtra("metadataTemplate");
             Path destDir = Paths.get(intent.getStringExtra("destDir"));
             Path takesDir = Paths.get(intent.getStringExtra("takesDir"));
             record(mt, destDir, takesDir);
