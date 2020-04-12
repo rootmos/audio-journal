@@ -165,7 +165,7 @@ class MetadataTemplate implements Parcelable {
                 .digest(dest);
 
             AudioFile af = AudioFileIO.read(dest.toFile());
-            Tag t = af.getTag();
+            Tag t = af.getTagOrCreateDefault();
             t.setField(FieldKey.TITLE, title);
             t.setField(FieldKey.ARTIST, artist);
             t.setField(FieldKey.COMPOSER, composer);

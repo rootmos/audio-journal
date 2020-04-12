@@ -70,6 +70,7 @@ public class RecordingActivity extends Activity implements
         template.setFilename("%t%s");
 
         binding.status.titleTemplateValue.setText(template.getTitle());
+        binding.status.formatValue.setText(template.getFormat().toString());
 
         if(template.getPrefix() != null) {
             binding.status.prefixValue.setText(template.getPrefix().toString());

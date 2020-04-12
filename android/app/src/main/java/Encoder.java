@@ -84,10 +84,6 @@ public abstract class Encoder {
             final AndroidLame lame = new LameBuilder()
                 .setInSampleRate(sampleRate)
                 .setOutBitrate(320)
-                // HACK: to get around:
-                // org.jaudiotagger.audio.exceptions.InvalidAudioFrameException: No audio header found
-                .setId3tagYear(OffsetDateTime.now()
-                        .format(DateTimeFormatter.ofPattern("y")))
                 .build();
 
             final OutputStream os = Files.newOutputStream(out);

@@ -361,7 +361,7 @@ public class RecordingService extends Service {
             try {
                 Files.createDirectories(takesDir);
 
-                encoder = Encoder.PCM16(MetadataTemplate.Format.FLAC,
+                encoder = Encoder.PCM16(template.getFormat(),
                         path, recorder.getSampleRate());
             } catch(IOException e) {
                 throw new RuntimeException("can't open output stream", e);

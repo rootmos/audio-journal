@@ -14,4 +14,5 @@
     <string name="title_label">Title:</string>
     <string name="title_template_label">Title template:</string>
     <string name="prefix_label">Prefix:</string>
+    <string name="format_label">Format:</string>
 </resources>
