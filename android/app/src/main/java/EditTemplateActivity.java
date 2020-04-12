@@ -59,7 +59,7 @@ public class EditTemplateActivity extends Activity {
                 binding.artistValue.getText().toString(),
                 binding.composerValue.getText().toString(),
                 f);
-        n.setPrefix(Paths.get(binding.composerValue.getText().toString()));
+        n.setPrefix(Paths.get(binding.prefixValue.getText().toString()));
         n.setFilename(binding.filenameValue.getText().toString());
 
         Intent i = new Intent();

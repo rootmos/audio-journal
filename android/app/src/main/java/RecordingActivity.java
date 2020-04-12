@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.Random;
+import java.util.ArrayList;
 
 import android.Manifest;
 import android.app.Activity;
@@ -35,7 +36,7 @@ public class RecordingActivity extends Activity implements
 
     private Settings settings = new Settings(this);
 
-    private int changeTemplateRequestId = 0;
+    private int changeTemplateRequestId = new Random().nextInt();
     private MetadataTemplate template = null;
 
     private RecordingService.Binder rs = null;
@@ -68,24 +69,28 @@ public class RecordingActivity extends Activity implements
         binding.status.duration.setAutoSizeTextTypeWithDefaults(
                 TextView.AUTO_SIZE_TEXT_TYPE_UNIFORM);
 
-        changeTemplateRequestId = new Random().nextInt();
+        template = getIntent().getParcelableExtra("template");
+        if(template == null) {
+            if(savedInstanceState != null) {
+                ArrayList<MetadataTemplate> ts =
+                    savedInstanceState.getParcelableArrayList("templates");
+                if(ts.isEmpty()) {
+                    triggerTemplateChange();
+                } else {
+                    // TODO: make default configurable
+                    template = ts.get(0);
+                }
+            } else {
+                triggerTemplateChange();
+            }
+        }
+
 
         binding.status.getRoot().setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
-                Intent i = new Intent(RecordingActivity.this,
-                        ListTemplatesActivity.class);
-                startActivityForResult(i, changeTemplateRequestId);
+                triggerTemplateChange();
             }
         });
-
-        template = getIntent().getParcelableExtra("template");
-        if(template == null) {
-            // TODO: read default from store
-            template = new MetadataTemplate(
-                        "Session @ %t", "rootmos", "Gustav Behm", Format.FLAC);
-            template.setPrefix(Paths.get("sessions"));
-            template.setFilename("%t%s");
-        }
 
         binding.start.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
@@ -100,6 +105,11 @@ public class RecordingActivity extends Activity implements
                 rs.stop();
             }
         });
+    }
+
+    public void triggerTemplateChange() {
+        Intent i = new Intent(this, ListTemplatesActivity.class);
+        startActivityForResult(i, changeTemplateRequestId);
     }
 
     @Override
@@ -139,7 +149,9 @@ public class RecordingActivity extends Activity implements
 
         ensurePermissionGranted(Manifest.permission.RECORD_AUDIO);
 
-        updateTemplate(template);
+        if(template != null) {
+            updateTemplate(template);
+        }
     }
 
     @Override

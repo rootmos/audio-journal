@@ -26,7 +26,7 @@ public class ListTemplatesActivity extends Activity {
     private TemplatesAdapter ta = new TemplatesAdapter();
     private TemplateItem active_template = null;
 
-    private int editTemplateRequestId = 0;
+    private int editTemplateRequestId = new Random().nextInt();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -50,6 +50,12 @@ public class ListTemplatesActivity extends Activity {
         binding.templates.setAdapter(ta);
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        Log.i(TAG, "resuming list templates activity");
+    }
+
     private class TemplateItem implements View.OnClickListener {
         private MetadataTemplate t = null;
         private TemplateItemBinding binding = null;
@@ -58,14 +64,20 @@ public class ListTemplatesActivity extends Activity {
             this.t = t;
         }
 
+        public void update(MetadataTemplate t) {
+            this.t = t;
+
+            binding.titleTemplateValue.setText(t.getTitle());
+            binding.prefixValue.setText(t.getPrefix().toString());
+            binding.formatValue.setText(t.getFormat().toString());
+        }
+
         public View getView(ViewGroup vg) {
             if(binding != null) return binding.getRoot();
 
             binding = TemplateItemBinding.inflate(getLayoutInflater());
 
-            binding.titleTemplateValue.setText(t.getTitle());
-            binding.prefixValue.setText(t.getPrefix().toString());
-            binding.formatValue.setText(t.getFormat().toString());
+            update(t);
 
             binding.getRoot().setOnClickListener(this);
             registerForContextMenu(binding.getRoot());
@@ -145,7 +157,6 @@ public class ListTemplatesActivity extends Activity {
             case R.id.edit_template: {
                 Intent I = new Intent(this, EditTemplateActivity.class);
                 I.putExtra("template", active_template.t);
-                editTemplateRequestId = new Random().nextInt();
                 startActivityForResult(I, editTemplateRequestId);
                 return true;
             }
@@ -153,6 +164,14 @@ public class ListTemplatesActivity extends Activity {
                 return true;
             default:
                 return super.onContextItemSelected(i);
+        }
+    }
+
+    @Override
+    public void onActivityResult(int req, int rc, Intent i) {
+        if(req == editTemplateRequestId && rc == RESULT_OK) {
+            MetadataTemplate t = i.getParcelableExtra("template");
+            active_template.update(t);
         }
     }
 }
