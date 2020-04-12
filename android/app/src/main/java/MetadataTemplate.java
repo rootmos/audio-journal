@@ -63,10 +63,13 @@ class MetadataTemplate implements Parcelable {
         });
     }
 
+    public String getArtist() { return artist; }
+    public String getComposer() { return composer; }
     public String getTitle() { return title; }
     public String getSuffix() { return suffix; }
     public Path getPrefix() { return prefix; }
     public Format getFormat() { return format; }
+    public String getFilename() { return filename; }
 
     public void setPrefix(Path prefix) { this.prefix = prefix; }
     public void setFilename(String filename) { this.filename = filename; }

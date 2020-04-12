@@ -4,8 +4,9 @@ import static io.rootmos.audiojournal.Common.TAG;
 import io.rootmos.audiojournal.databinding.ListTemplatesBinding;
 import io.rootmos.audiojournal.databinding.TemplateItemBinding;
 
-import java.util.ArrayList;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Random;
 
 import android.app.Activity;
 import android.content.Intent;
@@ -24,6 +25,8 @@ public class ListTemplatesActivity extends Activity {
     private ListTemplatesBinding binding = null;
     private TemplatesAdapter ta = new TemplatesAdapter();
     private TemplateItem active_template = null;
+
+    private int editTemplateRequestId = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -139,8 +142,13 @@ public class ListTemplatesActivity extends Activity {
             case R.id.record_using_template:
                 returnTemplate(active_template.t);
                 return true;
-            case R.id.edit_template:
+            case R.id.edit_template: {
+                Intent I = new Intent(this, EditTemplateActivity.class);
+                I.putExtra("template", active_template.t);
+                editTemplateRequestId = new Random().nextInt();
+                startActivityForResult(I, editTemplateRequestId);
                 return true;
+            }
             case R.id.delete_template:
                 return true;
             default:

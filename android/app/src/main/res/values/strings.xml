@@ -16,7 +16,10 @@
     <string name="title_template_label">Title template:</string>
     <string name="prefix_label">Prefix:</string>
     <string name="format_label">Format:</string>
+    <string name="filename_label">Filename:</string>
     <string name="delete_template">Delete template</string>
     <string name="edit_template">Edit template</string>
     <string name="record_using_template">Record using this template</string>
+    <string name="mp3">MP3</string>
+    <string name="flac">FLAC</string>
 </resources>

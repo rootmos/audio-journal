@@ -22,8 +22,9 @@
             android:parentActivityName=".MainActivity"
             android:exported="true" />
         <activity android:name=".ListTemplatesActivity"
-            android:parentActivityName=".RecordingActivity"
-            android:exported="true" />
+            android:parentActivityName=".RecordingActivity" />
+        <activity android:name=".EditTemplateActivity"
+            android:parentActivityName=".ListTemplatesActivity" />
         <service android:name=".RecordingService" />
         <provider
             android:name="androidx.core.content.FileProvider"
