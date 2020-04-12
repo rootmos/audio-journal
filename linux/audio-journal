@@ -15,21 +15,49 @@ SUFFIX=${AUDIO_JOURNAL_SUFFIX-.mp3}
 PLAYER=${PLAYER-mpv}
 BUCKET=${AUDIO_JOURNAL_BUCKET-rootmos-sounds}
 BUCKET_REGION=${AUDIO_JOURNAL_BUCKET_REGION-eu-central-1}
-while getopts "psRrlLPm:t:" OPT; do
+DRY_RUN=
+while getopts "hspRrlLP:m:t:nd:" OPT; do
     case $OPT in
+        h) ACTION=usage ;;
         r) ACTION=record ;;
         l) ACTION=listen ;;
         L) ACTION=list ;;
-        P) ACTION=publish ;;
+        P) ACTION=publish; SRC=$OPTARG ;;
         p) MODE=practice ;;
         s) MODE=sessions ;;
         R) MODE=release ;;
+        d) DATE=$OPTARG ;;
+        n) DRY_RUN=1 ;;
         m) MODE=$OPTARG ;;
         t) TITLE=$OPTARG ;;
         \?) echo "Invalid option: -$OPTARG" >&2; exit 2 ;;
     esac
 done
 shift $((OPTIND-1))
+
+if [ "$ACTION" = "usage" ]; then
+    cat <<EOF 1>&2
+$(basename "$0")
+
+actions:
+    -r      record (default)
+    -l      listen
+    -L      list
+    -P SRC  publish as current mode (default: sessions)
+    -h      show this message
+
+options:
+    -t TITLE    set title
+    -d DATE     set date (during publish)
+    -n          dry run (skip upload)
+
+mode:
+    -s       jam sesssion (default)
+    -p       practice
+    -r       release
+    -m MODE  custom mode
+EOF
+fi
 
 # functions
 
@@ -102,27 +130,26 @@ EOF
 
 postprocess() {
     DATE=$2
-    TITLE=$3
-    unset OUT
-    if [ "$MODE" = "release" ]; then
-        if [ -z "$TITLE" ]; then
-            read -rp "Title: " TITLE
-        fi
+    TITLE=${3-}
 
-        if [ -n "$TITLE" ]; then
-            OUT=$AUDIO_JOURNAL/${DATE}_$(tr ' ' '-' <<< "$TITLE")$SUFFIX
+    if [ -z "$TITLE" ]; then
+        if [ "$MODE" = "practice" ]; then
+            TITLE="Session @ $DATE"
+        else
+            read -rp "Title: " TITLE
         fi
     fi
 
-    if [[ ! -v OUT ]]; then
+    if [ "$MODE" = "release" ]; then
+        OUT=$AUDIO_JOURNAL/${DATE}_$(tr ' ' '-' <<< "$TITLE")$SUFFIX
+    else
         mkdir -p "$AUDIO_JOURNAL/$MODE"
         OUT=$AUDIO_JOURNAL/$MODE/$DATE$SUFFIX
-        TITLE="Session @ $DATE"
     fi
 
     sox --ignore-length "$1" "$OUT" $POST_FILTERS
     METADATA=$(tag "$OUT" "$DATE" "$TITLE")
-    if [[ ! -v DRY_RUN ]]; then
+    if [ "$DRY_RUN" != 1 ]; then
         save_to_secondary "$OUT"
         save_to_secondary "$METADATA"
         upload "$OUT"
@@ -140,7 +167,7 @@ publish() {
         TITLE=$(get_tag TIT2 "$1")
     fi
 
-    DATE=$(get_tag TRDA "$1")
+    DATE=${DATE-$(get_tag TRDA "$1")}
     if [ -z "$DATE" ]; then
         DATE=$(date -Is)
     fi
@@ -247,7 +274,7 @@ case $ACTION in
         ;;
     publish)
         prepare
-        publish "$1" "$TITLE"
+        publish "$SRC" "$TITLE"
         ;;
     list)
         prepare_read_only
