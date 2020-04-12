@@ -9,10 +9,12 @@ import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.Random;
 
 import android.Manifest;
 import android.app.Activity;
 import android.content.ComponentName;
+import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
@@ -32,6 +34,9 @@ public class RecordingActivity extends Activity implements
     private Set<String> granted_permissions = new HashSet<>();
 
     private Settings settings = new Settings(this);
+
+    private int changeTemplateRequestId = 0;
+    private MetadataTemplate template = null;
 
     private RecordingService.Binder rs = null;
     private ServiceConnection sc = new ServiceConnection() {
@@ -63,17 +68,23 @@ public class RecordingActivity extends Activity implements
         binding.status.duration.setAutoSizeTextTypeWithDefaults(
                 TextView.AUTO_SIZE_TEXT_TYPE_UNIFORM);
 
-        final MetadataTemplate template = new MetadataTemplate(
-                "Session @ %t", "rootmos", "Gustav Behm", Format.MP3);
-        template.setPrefix(Paths.get("sessions"));
-        template.setFilename("%t%s");
+        changeTemplateRequestId = new Random().nextInt();
 
-        binding.status.titleTemplateValue.setText(template.getTitle());
-        binding.status.formatValue.setText(template.getFormat().toString());
+        binding.status.getRoot().setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                Intent i = new Intent(RecordingActivity.this,
+                        ListTemplatesActivity.class);
+                startActivityForResult(i, changeTemplateRequestId);
+            }
+        });
 
-        if(template.getPrefix() != null) {
-            binding.status.prefixValue.setText(template.getPrefix().toString());
-            binding.status.prefix.setVisibility(View.VISIBLE);
+        template = getIntent().getParcelableExtra("template");
+        if(template == null) {
+            // TODO: read default from store
+            template = new MetadataTemplate(
+                        "Session @ %t", "rootmos", "Gustav Behm", Format.FLAC);
+            template.setPrefix(Paths.get("sessions"));
+            template.setFilename("%t%s");
         }
 
         binding.start.setOnClickListener(new View.OnClickListener() {
@@ -89,6 +100,27 @@ public class RecordingActivity extends Activity implements
                 rs.stop();
             }
         });
+    }
+
+    @Override
+    public void onActivityResult(int req, int rc, Intent i) {
+        if(req == changeTemplateRequestId && rc == RESULT_OK) {
+            template = i.getParcelableExtra("template");
+        }
+    }
+
+    private void updateTemplate(MetadataTemplate t) {
+        Log.i(TAG, String.format("setting template: hashCode=%d", t.hashCode()));
+
+        binding.status.titleTemplateValue.setText(template.getTitle());
+        binding.status.formatValue.setText(template.getFormat().toString());
+
+        if(template.getPrefix() != null) {
+            binding.status.prefixValue.setText(t.getPrefix().toString());
+            binding.status.prefix.setVisibility(View.VISIBLE);
+        } else {
+            binding.status.prefix.setVisibility(View.GONE);
+        }
     }
 
     @Override
@@ -108,6 +140,8 @@ public class RecordingActivity extends Activity implements
         RecordingService.bind(this, sc);
 
         ensurePermissionGranted(Manifest.permission.RECORD_AUDIO);
+
+        updateTemplate(template);
     }
 
     @Override
@@ -160,6 +194,8 @@ public class RecordingActivity extends Activity implements
         binding.status.dateValue.setText(started.getTime().withNano(0)
                 .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
         binding.status.date.setVisibility(View.VISIBLE);
+
+        binding.status.getRoot().setOnClickListener(null);
     }
 
     @Override

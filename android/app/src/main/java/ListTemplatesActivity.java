@@ -7,11 +7,12 @@ import java.util.ArrayList;
 import java.nio.file.Paths;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
-import android.widget.BaseAdapter;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.BaseAdapter;
 
 public class ListTemplatesActivity extends Activity {
     private ListTemplatesBinding binding = null;
@@ -24,16 +25,22 @@ public class ListTemplatesActivity extends Activity {
         setContentView(binding.getRoot());
         Log.i(TAG, "creating list templates activity");
 
-        final MetadataTemplate template = new MetadataTemplate(
-                "Session @ %t", "rootmos", "Gustav Behm", Format.MP3);
-        template.setPrefix(Paths.get("sessions"));
-        template.setFilename("%t%s");
+        // TODO: read from store
+        MetadataTemplate t0 = new MetadataTemplate(
+                "Session @ %t", "rootmos", "Gustav Behm", Format.FLAC);
+        t0.setPrefix(Paths.get("sessions"));
+        t0.setFilename("%t%s");
 
-        ta.addTemplates(template);
+        MetadataTemplate t1 = new MetadataTemplate(
+                "Practice @ %t", "rootmos", "Gustav Behm", Format.MP3);
+        t1.setPrefix(Paths.get("practice"));
+        t1.setFilename("%t%s");
+
+        ta.addTemplates(t0, t1);
         binding.templates.setAdapter(ta);
     }
 
-    private class TemplateItem {
+    private class TemplateItem implements View.OnClickListener {
         private MetadataTemplate t = null;
         private TemplateItemBinding binding = null;
 
@@ -50,7 +57,18 @@ public class ListTemplatesActivity extends Activity {
             binding.prefixValue.setText(t.getPrefix().toString());
             binding.formatValue.setText(t.getFormat().toString());
 
+            binding.getRoot().setOnClickListener(this);
+
             return binding.getRoot();
+        }
+
+        @Override
+        public void onClick(View w) {
+            Intent i = new Intent();
+            i.putExtra("template", t);
+            setResult(RESULT_OK, i);
+            Log.i(TAG, String.format("returning template: hashCode=%d", t.hashCode()));
+            finish();
         }
     }
 
@@ -59,8 +77,7 @@ public class ListTemplatesActivity extends Activity {
 
         public void addTemplates(MetadataTemplate... ts) {
             for(MetadataTemplate t : ts) {
-                TemplateItem ti = new TemplateItem(t);
-                this.ts.add(ti);
+                this.ts.add(new TemplateItem(t));
             }
 
             notifyDataSetChanged();

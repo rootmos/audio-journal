@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 
 import org.jaudiotagger.audio.AudioFile;
 import org.jaudiotagger.audio.AudioFileIO;
@@ -52,6 +53,16 @@ class MetadataTemplate implements Parcelable {
         }
     }
 
+    public int hashCode() {
+        return Arrays.hashCode(new Object[] {
+            title,
+            artist,
+            composer,
+            format,
+            suffix
+        });
+    }
+
     public String getTitle() { return title; }
     public String getSuffix() { return suffix; }
     public Path getPrefix() { return prefix; }
@@ -68,7 +79,7 @@ class MetadataTemplate implements Parcelable {
         out.writeString(title);
         out.writeString(artist);
         out.writeString(composer);
-        out.writeParcelable(format, flags);
+        out.writeTypedObject(format, flags);
         out.writeString(prefix != null ? prefix.toString() : null);
         out.writeString(filename != null ? filename.toString() : null);
     }
