@@ -65,7 +65,7 @@ public class RecordingActivity extends Activity implements
 
         final MetadataTemplate template = new MetadataTemplate(
                 "Session @ %t", "rootmos", "Gustav Behm",
-                MetadataTemplate.Format.FLAC);
+                MetadataTemplate.Format.MP3);
         template.setPrefix(Paths.get("sessions"));
         template.setFilename("%t%s");
 

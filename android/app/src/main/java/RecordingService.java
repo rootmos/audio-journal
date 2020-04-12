@@ -29,13 +29,6 @@ import android.util.Log;
 import android.media.AudioRecord;
 import android.media.AudioFormat;
 
-import net.sourceforge.javaflacencoder.FLACEncoder;
-import net.sourceforge.javaflacencoder.FLACFileOutputStream;
-import net.sourceforge.javaflacencoder.StreamConfiguration;
-import net.sourceforge.javaflacencoder.EncodingConfiguration;
-
-import com.naman14.androidlame.AndroidLame;
-
 public class RecordingService extends Service {
     private static int NOTIFICATION_ID = 603141;
     private NotificationManager nm = null;
@@ -305,8 +298,7 @@ public class RecordingService extends Service {
         private Path takesDir = null;
 
         private AudioRecord recorder = null;
-        private FLACEncoder encoder = null;
-        private FLACFileOutputStream out = null;
+        private Encoder encoder = null;
         private Path path = null;
         private OffsetDateTime time = null;
         private AtomicBoolean stopping = new AtomicBoolean(false);
@@ -361,17 +353,6 @@ public class RecordingService extends Service {
             Log.d(TAG, "configured sample rate: " + recorder.getSampleRate());
             Log.d(TAG, "configured buffer size in frames: " + recorder.getBufferSizeInFrames());
 
-            encoder = new FLACEncoder();
-            StreamConfiguration sc = new StreamConfiguration();
-            sc.setChannelCount(recorder.getChannelCount());
-            sc.setSampleRate(recorder.getSampleRate());
-            sc.setBitsPerSample(16);
-            encoder.setStreamConfiguration(sc);
-
-            EncodingConfiguration ec = new EncodingConfiguration();
-            ec.setSubframeType(EncodingConfiguration.SubframeType.EXHAUSTIVE);
-            encoder.setEncodingConfiguration(ec);
-
             time = OffsetDateTime.now();
 
             String fn = time.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
@@ -380,12 +361,8 @@ public class RecordingService extends Service {
             try {
                 Files.createDirectories(takesDir);
 
-                out = new FLACFileOutputStream(path.toFile());
-                if(!out.isValid()) {
-                    throw new RuntimeException("can't open output stream");
-                }
-                encoder.setOutputStream(out);
-                encoder.openFLACStream();
+                encoder = Encoder.PCM16(MetadataTemplate.Format.FLAC,
+                        path, recorder.getSampleRate());
             } catch(IOException e) {
                 throw new RuntimeException("can't open output stream", e);
             }
@@ -407,57 +384,45 @@ public class RecordingService extends Service {
             // TODO: make the chunk size configurable
             short[] samples = new short[1024*channels];
             short max = 0;
-            long samples_captured = 0, samples_encoded = 0, samples_clipped = 0;
+            long samples_clipped = 0;
             while(!stopping.get()) {
                 int r = recorder.read(samples, 0, samples.length,
                         AudioRecord.READ_BLOCKING);
                 if(r < 0) {
                     throw new RuntimeException("audio recording falied: " + r);
                 }
-                samples_captured += r;
 
                 long sum = 0;
                 short cur = 0;
-                int[] is = new int[r];
                 for(int i = 0; i < r; ++i) {
                     short n = (short)Math.abs(samples[i]);
                     if(n == Short.MAX_VALUE) samples_clipped++;
                     if(cur < n) cur = n;
-                    is[i] = samples[i];
                 }
                 if(max < cur) max = cur;
-                encoder.addSamples(is, is.length/channels);
 
-                int enc;
-                if((enc = encoder.fullBlockSamplesAvailableToEncode()) > 0) {
-                    try {
-                        r = encoder.encodeSamples(enc, false);
-                    } catch(IOException e) {
-                        throw new RuntimeException("can't encode samples", e);
-                    }
-                    samples_encoded += r * channels;
+                try {
+                    encoder.update(samples);
+                } catch(IOException e) {
+                    throw new RuntimeException("unable to encode samples", e);
                 }
 
                 Progress p = new Progress(template, time,
-                        sampleRate, samples_encoded, samples_clipped, channels,
+                        sampleRate, encoder.getSamplesEncoded(),
+                        samples_clipped, channels,
                         max, cur);
                 publishProgress(p);
 
                 Log.d(TAG, String.format(
                     "recording: samples captured=%d encoded=%d, cur=%d, max=%d",
-                    samples_captured, samples_encoded, cur, max));
+                    encoder.getSamplesCaptured(),
+                    encoder.getSamplesEncoded(), cur, max));
             }
 
             try {
-                int s = samples_encoded == samples_captured ? 0 :
-                    encoder.samplesAvailableToEncode();
-                int r = encoder.encodeSamples(s, true);
-                if(r < s) {
-                    Log.w(TAG, "trying to encode end one more time");
-                    encoder.encodeSamples(s, true);
-                }
+                encoder.finalize();
             } catch(IOException e) {
-                throw new RuntimeException("can't encode samples", e);
+                throw new RuntimeException("unable to finalize recording", e);
             }
 
             Log.d(TAG, "releasing audio recorder");
@@ -465,14 +430,8 @@ public class RecordingService extends Service {
             recorder.release();
             recorder = null;
 
-            try {
-                out.close();
-            } catch(IOException e) {
-                throw new RuntimeException("can't close output stream", e);
-            }
-
             float seconds = Utils.samplesAndSampleRateToSeconds(
-                    samples_encoded, sampleRate, channels);
+                    encoder.getSamplesEncoded(), sampleRate, channels);
             Log.i(TAG, String.format("finished recording (%.2fs): %s",
                         seconds, path));
             return template.renderLocalFile(destDir, path, time, seconds);
