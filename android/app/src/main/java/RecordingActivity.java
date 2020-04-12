@@ -34,7 +34,7 @@ public class RecordingActivity extends Activity implements
     private Settings settings = new Settings(this);
 
     private RecordingService.Binder rs = null;
-    ServiceConnection sc = new ServiceConnection() {
+    private ServiceConnection sc = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             Log.i(TAG, "recording activity connected to recording service");

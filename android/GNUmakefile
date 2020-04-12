@@ -13,7 +13,7 @@ install: $(ANDROID_SDK_ROOT)
 	@$(GRADLE) $(GRADLE_OPTS) installDebug
 
 start:
-	@$(ADB) shell am start -n io.rootmos.audiojournal/.RecordingActivity
+	@$(ADB) shell am start -n io.rootmos.audiojournal/.ListTemplatesActivity
 
 $(ANDROID_SDK_ROOT):
 	./sdk.sh "$@"
