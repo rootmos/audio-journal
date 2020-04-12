@@ -19,7 +19,7 @@ $(ANDROID_SDK_ROOT):
 	./sdk.sh "$@"
 
 clean:
-	@$(GRADLE) $(GRADLE_OPTS) clean
+	@$(GRADLE) $(GRADLE_OPTS) myClean
 
 LOG_LEVEL ?= I
 logs:
