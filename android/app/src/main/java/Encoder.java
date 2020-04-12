@@ -99,18 +99,19 @@ public abstract class Encoder {
                     samples_captured += samples.length;
 
                     byte bs[] = new byte[4096];
-                    lame.encodeBufferInterLeaved(samples, samples.length/2, bs);
+                    int l = lame.encodeBufferInterLeaved(samples,
+                            samples.length/2, bs);
 
-                    os.write(bs);
+                    os.write(bs, 0, l);
 
                     samples_encoded += samples.length;
                 }
 
                 public void finalize() throws IOException {
                     byte bs[] = new byte[4096];
-                    lame.flush(bs);
+                    int l = lame.flush(bs);
                     lame.close();
-                    os.write(bs);
+                    os.write(bs, 0, l);
                     os.close();
                 }
             };
