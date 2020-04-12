@@ -64,8 +64,7 @@ public class RecordingActivity extends Activity implements
                 TextView.AUTO_SIZE_TEXT_TYPE_UNIFORM);
 
         final MetadataTemplate template = new MetadataTemplate(
-                "Session @ %t", "rootmos", "Gustav Behm",
-                MetadataTemplate.Format.MP3);
+                "Session @ %t", "rootmos", "Gustav Behm", Format.MP3);
         template.setPrefix(Paths.get("sessions"));
         template.setFilename("%t%s");
 

@@ -22,5 +22,14 @@
             android:parentActivityName=".MainActivity"
             android:exported="true" />
         <service android:name=".RecordingService" />
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/provider_paths"/>
+        </provider>
     </application>
 </manifest>

@@ -6,6 +6,7 @@
     <string name="pause">Pause</string>
     <string name="stop">Stop</string>
     <string name="upload">Upload</string>
+    <string name="share">Share</string>
     <string name="artist_label">Artist:</string>
     <string name="composer_label">Composer:</string>
     <string name="duration_label">Duration:</string>

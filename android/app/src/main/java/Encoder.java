@@ -22,11 +22,9 @@ public abstract class Encoder {
     public abstract int getSamplesCaptured();
     public abstract int getSamplesEncoded();
 
-    public static Encoder PCM16(
-            MetadataTemplate.Format format,
-            Path out,
-            int sampleRate) throws IOException {
-        if(format == MetadataTemplate.Format.FLAC) {
+    public static Encoder PCM16(Format format, Path out, int sampleRate)
+            throws IOException {
+        if(format == Format.FLAC) {
             final FLACEncoder encoder = new FLACEncoder();
             StreamConfiguration sc = new StreamConfiguration();
             sc.setChannelCount(2);
@@ -80,7 +78,7 @@ public abstract class Encoder {
                     os.close();
                 }
             };
-        } else if(format == MetadataTemplate.Format.MP3) {
+        } else if(format == Format.MP3) {
             final AndroidLame lame = new LameBuilder()
                 .setInSampleRate(sampleRate)
                 .setOutBitrate(320)

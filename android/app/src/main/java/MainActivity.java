@@ -273,6 +273,7 @@ public class MainActivity extends Activity implements
         private ImageButton pause = null;
         private ImageButton stop = null;
         private ImageButton upload = null;
+        private ImageButton share = null;
 
         private MediaPlayer player = null;
         private FileInputStream is = null;
@@ -290,6 +291,8 @@ public class MainActivity extends Activity implements
                 play_sound(this);
             } else if(w == upload) {
                 upload_sound(this);
+            } else if(w == share) {
+                startActivity(s.getShareIntent(ctx));
             } else {
                 if(active_sound != this) {
                     Log.w(TAG, "click on inactive sound");
@@ -350,6 +353,9 @@ public class MainActivity extends Activity implements
             if(s.getURI() == null && s.getLocal() != null) {
                 upload.setVisibility(View.VISIBLE);
             }
+
+            share = (ImageButton)v.findViewById(R.id.share);
+            share.setOnClickListener(this);
 
             return v;
         }

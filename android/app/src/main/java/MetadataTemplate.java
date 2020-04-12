@@ -30,26 +30,6 @@ class MetadataTemplate implements Parcelable {
     private String filename = null;
     private String suffix = null;
 
-    public enum Format {
-        FLAC(1), MP3(2);
-
-        private int v;
-
-        private Format(int v) {
-            this.v = v;
-        }
-
-        private static Format valueOf(int v) {
-            if(v == Format.FLAC.v) {
-                return Format.FLAC;
-            } else if(v == Format.MP3.v) {
-                return Format.MP3;
-            } else {
-                throw new RuntimeException("unsupported format: " + v);
-            }
-        }
-    }
-
     private Format format = null;
 
     public MetadataTemplate(
@@ -88,7 +68,7 @@ class MetadataTemplate implements Parcelable {
         out.writeString(title);
         out.writeString(artist);
         out.writeString(composer);
-        out.writeInt(format.v);
+        out.writeParcelable(format, flags);
         out.writeString(prefix != null ? prefix.toString() : null);
         out.writeString(filename != null ? filename.toString() : null);
     }
@@ -100,7 +80,7 @@ class MetadataTemplate implements Parcelable {
                         in.readString(),
                         in.readString(),
                         in.readString(),
-                        Format.valueOf(in.readInt()));
+                        in.readTypedObject(Format.CREATOR));
                 String prefix = in.readString();
                 if(prefix != null) mt.setPrefix(Paths.get(prefix));
                 mt.setFilename(in.readString());
@@ -177,6 +157,7 @@ class MetadataTemplate implements Parcelable {
             Sound s = new Sound(title, artist, composer, sha1, length);
             s.setLocal(dest);
             s.setDateTime(time);
+            s.setMimeType(format.getMimeType());
 
             Path m = dest.resolveSibling(dest.getFileName().toString()
                     .replaceAll(String.format("%s$", suffix), ".json"));
