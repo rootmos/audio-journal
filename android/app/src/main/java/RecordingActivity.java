@@ -74,7 +74,7 @@ public class RecordingActivity extends Activity implements
             if(savedInstanceState != null) {
                 ArrayList<MetadataTemplate> ts =
                     savedInstanceState.getParcelableArrayList("templates");
-                if(ts.isEmpty()) {
+                if(ts == null || ts.isEmpty()) {
                     triggerTemplateChange();
                 } else {
                     // TODO: make default configurable

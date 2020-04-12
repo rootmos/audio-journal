@@ -12,7 +12,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
+import java.util.UUID;
 
 import org.jaudiotagger.audio.AudioFile;
 import org.jaudiotagger.audio.AudioFileIO;
@@ -23,24 +23,37 @@ import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.codec.digest.MessageDigestAlgorithms;
 
 class MetadataTemplate implements Parcelable {
+    private UUID id = null;
     private String title = null;
     private String artist = null;
     private String composer = null;
 
-    private Path prefix = null;
+    private String prefix = null;
     private String filename = null;
     private String suffix = null;
 
     private Format format = null;
 
     public MetadataTemplate(
+            UUID id,
             String title, String artist, String composer, Format format) {
+        this.id = id;
         this.title = title;
         this.artist = artist;
         this.composer = composer;
 
         this.format = format;
         this.suffix = selectSuffix(this.format);
+    }
+
+    public static MetadataTemplate freshEmpty() {
+        MetadataTemplate t = new MetadataTemplate(
+                UUID.randomUUID(),
+                "", "", "",
+                Format.MP3);
+        t.setPrefix("");
+        t.setFilename("%t%s");
+        return t;
     }
 
     private String selectSuffix(Format format) {
@@ -54,24 +67,19 @@ class MetadataTemplate implements Parcelable {
     }
 
     public int hashCode() {
-        return Arrays.hashCode(new Object[] {
-            title,
-            artist,
-            composer,
-            format,
-            suffix
-        });
+        return id.hashCode();
     }
 
+    public UUID getId() { return id; }
     public String getArtist() { return artist; }
     public String getComposer() { return composer; }
     public String getTitle() { return title; }
     public String getSuffix() { return suffix; }
-    public Path getPrefix() { return prefix; }
+    public String getPrefix() { return prefix; }
     public Format getFormat() { return format; }
     public String getFilename() { return filename; }
 
-    public void setPrefix(Path prefix) { this.prefix = prefix; }
+    public void setPrefix(String prefix) { this.prefix = prefix; }
     public void setFilename(String filename) { this.filename = filename; }
 
     @Override
@@ -79,6 +87,7 @@ class MetadataTemplate implements Parcelable {
 
     @Override
     public void writeToParcel(Parcel out, int flags) {
+        out.writeString(id.toString());
         out.writeString(title);
         out.writeString(artist);
         out.writeString(composer);
@@ -91,12 +100,13 @@ class MetadataTemplate implements Parcelable {
         new Parcelable.Creator<MetadataTemplate>() {
             public MetadataTemplate createFromParcel(Parcel in) {
                 MetadataTemplate mt = new MetadataTemplate(
+                        UUID.fromString(in.readString()),
                         in.readString(),
                         in.readString(),
                         in.readString(),
                         in.readTypedObject(Format.CREATOR));
                 String prefix = in.readString();
-                if(prefix != null) mt.setPrefix(Paths.get(prefix));
+                if(prefix != null) mt.setPrefix(prefix);
                 mt.setFilename(in.readString());
                 return mt;
             }

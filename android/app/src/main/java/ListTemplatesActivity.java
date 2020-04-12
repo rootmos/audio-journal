@@ -35,19 +35,16 @@ public class ListTemplatesActivity extends Activity {
         setContentView(binding.getRoot());
         Log.i(TAG, "creating list templates activity");
 
-        // TODO: read from store
-        MetadataTemplate t0 = new MetadataTemplate(
-                "Session @ %t", "rootmos", "Gustav Behm", Format.FLAC);
-        t0.setPrefix(Paths.get("sessions"));
-        t0.setFilename("%t%s");
+        if(savedInstanceState != null) {
+            ArrayList<MetadataTemplate> ts =
+                savedInstanceState.getParcelableArrayList("templates");
+            ta.addTemplates(ts.toArray(new MetadataTemplate[0]));
+        }
 
-        MetadataTemplate t1 = new MetadataTemplate(
-                "Practice @ %t", "rootmos", "Gustav Behm", Format.MP3);
-        t1.setPrefix(Paths.get("practice"));
-        t1.setFilename("%t%s");
-
-        ta.addTemplates(t0, t1);
         binding.templates.setAdapter(ta);
+
+        binding.add.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { add(); } });
     }
 
     @Override
@@ -121,6 +118,15 @@ public class ListTemplatesActivity extends Activity {
             return null;
         }
 
+        public ArrayList<MetadataTemplate> getTemplates() {
+            ArrayList<MetadataTemplate> ms =
+                new ArrayList<>(ts.size());
+            for(int i = 0; i < ts.size(); ++i) {
+                ms.set(i, ts.get(i).t);
+            }
+            return ms;
+        }
+
         @Override
         public long getItemId(int i) {
             return ts.get(i).hashCode();
@@ -171,7 +177,28 @@ public class ListTemplatesActivity extends Activity {
     public void onActivityResult(int req, int rc, Intent i) {
         if(req == editTemplateRequestId && rc == RESULT_OK) {
             MetadataTemplate t = i.getParcelableExtra("template");
-            active_template.update(t);
+            if(active_template == null) {
+                ta.addTemplates(t);
+            } else {
+                active_template.update(t);
+            }
         }
+    }
+
+    private void add() {
+        active_template = null;
+
+        MetadataTemplate t = MetadataTemplate.freshEmpty();
+        Intent I = new Intent(this, EditTemplateActivity.class);
+        I.putExtra("template", t);
+        startActivityForResult(I, editTemplateRequestId);
+    }
+
+    @Override
+    public void onSaveInstanceState(Bundle savedInstanceState) {
+        super.onSaveInstanceState(savedInstanceState);
+
+        savedInstanceState.putParcelableArrayList(
+                "templates", ta.getTemplates());
     }
 }
