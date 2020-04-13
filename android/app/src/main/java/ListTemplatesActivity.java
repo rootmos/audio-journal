@@ -132,6 +132,11 @@ public class ListTemplatesActivity extends Activity {
             notifyDataSetChanged();
         }
 
+        public void remove(TemplateItem t) {
+            ts.remove(t);
+            notifyDataSetChanged();
+        }
+
         public TemplateItem lookupByView(View v) {
             for(TemplateItem t : ts) {
                 if(t.getView() == v) return t;
@@ -187,8 +192,10 @@ public class ListTemplatesActivity extends Activity {
                 startActivityForResult(I, editTemplateRequestId);
                 return true;
             }
-            case R.id.delete_template:
+            case R.id.delete_template: {
+                remove(active_template);
                 return true;
+            }
             default:
                 return super.onContextItemSelected(i);
         }
@@ -215,5 +222,11 @@ public class ListTemplatesActivity extends Activity {
         Intent I = new Intent(this, EditTemplateActivity.class);
         I.putExtra("template", t);
         startActivityForResult(I, editTemplateRequestId);
+    }
+
+    private void remove(TemplateItem t) {
+        Log.i(TAG, "removing template: " + t.t.getId());
+        ta.remove(t);
+        saveTemplates(ta.getTemplates());
     }
 }
