@@ -28,6 +28,7 @@ public class ListTemplatesActivity extends AppCompatActivity {
     private ListTemplatesBinding binding = null;
     private TemplatesAdapter ta = new TemplatesAdapter();
     private TemplateItem active_template = null;
+    private boolean choosing = false;
 
     private final int editTemplateRequestId = Utils.freshRequestCode();
 
@@ -45,7 +46,9 @@ public class ListTemplatesActivity extends AppCompatActivity {
         setSupportActionBar(binding.appbar.getRoot());
         getSupportActionBar().setDisplayHomeAsUpEnabled(true);
 
-        if(getIntent().getBooleanExtra("choose", false)) {
+        choosing = getIntent().getBooleanExtra("choose", choosing);
+
+        if(choosing) {
             setTitle(R.string.choose_template);
         }
     }
@@ -111,16 +114,22 @@ public class ListTemplatesActivity extends AppCompatActivity {
 
         @Override
         public void onClick(View w) {
-            returnTemplate(t);
+            recordUsingTemplate(t);
         }
 
     }
 
-    private void returnTemplate(MetadataTemplate t) {
-        Intent i = new Intent();
-        i.putExtra("template", t);
-        setResult(RESULT_OK, i);
-        finish();
+    private void recordUsingTemplate(MetadataTemplate t) {
+        if(choosing) {
+            Intent i = new Intent();
+            i.putExtra("template", t);
+            setResult(RESULT_OK, i);
+            finish();
+        } else {
+            Intent i = new Intent(this, RecordingActivity.class);
+            i.putExtra("template", t);
+            startActivity(i);
+        }
     }
 
     private class TemplatesAdapter extends BaseAdapter {
@@ -186,7 +195,7 @@ public class ListTemplatesActivity extends AppCompatActivity {
     public boolean onContextItemSelected(MenuItem i) {
         switch (i.getItemId()) {
             case R.id.record_using_template:
-                returnTemplate(active_template.t);
+                recordUsingTemplate(active_template.t);
                 return true;
             case R.id.edit_template:
                 edit(active_template);
