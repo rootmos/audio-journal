@@ -9,10 +9,12 @@ import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.ArrayList;
 
 import android.Manifest;
 import android.app.Activity;
 import android.content.ComponentName;
+import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
@@ -33,8 +35,11 @@ public class RecordingActivity extends Activity implements
 
     private Settings settings = new Settings(this);
 
+    private final int changeTemplateRequestId = Utils.freshRequestCode();
+    private MetadataTemplate template = null;
+
     private RecordingService.Binder rs = null;
-    ServiceConnection sc = new ServiceConnection() {
+    private ServiceConnection sc = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             Log.i(TAG, "recording activity connected to recording service");
@@ -63,18 +68,19 @@ public class RecordingActivity extends Activity implements
         binding.status.duration.setAutoSizeTextTypeWithDefaults(
                 TextView.AUTO_SIZE_TEXT_TYPE_UNIFORM);
 
-        final MetadataTemplate template = new MetadataTemplate(
-                "Session @ %t", "rootmos", "Gustav Behm", Format.MP3);
-        template.setPrefix(Paths.get("sessions"));
-        template.setFilename("%t%s");
-
-        binding.status.titleTemplateValue.setText(template.getTitle());
-        binding.status.formatValue.setText(template.getFormat().toString());
-
-        if(template.getPrefix() != null) {
-            binding.status.prefixValue.setText(template.getPrefix().toString());
-            binding.status.prefix.setVisibility(View.VISIBLE);
+        template = getIntent().getParcelableExtra("template");
+        if(template == null) {
+            template = settings.getDefaultTemplate();
+            if(template == null) {
+                triggerTemplateChange();
+            }
         }
+
+        binding.status.getRoot().setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                triggerTemplateChange();
+            }
+        });
 
         binding.start.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
@@ -89,6 +95,31 @@ public class RecordingActivity extends Activity implements
                 rs.stop();
             }
         });
+    }
+
+    public void triggerTemplateChange() {
+        Intent i = new Intent(this, ListTemplatesActivity.class);
+        i.putExtra("choose", true);
+        startActivityForResult(i, changeTemplateRequestId);
+    }
+
+    @Override
+    public void onActivityResult(int req, int rc, Intent i) {
+        if(req == changeTemplateRequestId && rc == RESULT_OK) {
+            template = i.getParcelableExtra("template");
+        }
+    }
+
+    private void updateTemplate(MetadataTemplate t) {
+        binding.status.titleTemplateValue.setText(template.getTitle());
+        binding.status.formatValue.setText(template.getFormat().toString());
+
+        if(template.getPrefix() != null) {
+            binding.status.prefixValue.setText(t.getPrefix().toString());
+            binding.status.prefix.setVisibility(View.VISIBLE);
+        } else {
+            binding.status.prefix.setVisibility(View.GONE);
+        }
     }
 
     @Override
@@ -108,6 +139,10 @@ public class RecordingActivity extends Activity implements
         RecordingService.bind(this, sc);
 
         ensurePermissionGranted(Manifest.permission.RECORD_AUDIO);
+
+        if(template != null) {
+            updateTemplate(template);
+        }
     }
 
     @Override
@@ -160,6 +195,8 @@ public class RecordingActivity extends Activity implements
         binding.status.dateValue.setText(started.getTime().withNano(0)
                 .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
         binding.status.date.setVisibility(View.VISIBLE);
+
+        binding.status.getRoot().setOnClickListener(null);
     }
 
     @Override

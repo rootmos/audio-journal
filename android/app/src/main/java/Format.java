@@ -12,13 +12,23 @@ public enum Format implements Parcelable {
         this.v = v;
     }
 
-    private static Format valueOf(int v) {
+    private static Format fromInt(int v) {
         if(v == FLAC.v) {
             return FLAC;
         } else if(v == MP3.v) {
             return MP3;
         } else {
             throw new RuntimeException("unsupported format: " + v);
+        }
+    }
+
+    public static Format fromString(String s) {
+        if(s.equals("FLAC")) {
+            return FLAC;
+        } else if(s.equals("MP3")) {
+            return MP3;
+        } else {
+            throw new RuntimeException("unsupported format: " + s);
         }
     }
 
@@ -54,7 +64,7 @@ public enum Format implements Parcelable {
     public static final Parcelable.Creator<Format> CREATOR =
         new Parcelable.Creator<Format>() {
             public Format createFromParcel(Parcel in) {
-                return valueOf(in.readInt());
+                return fromInt(in.readInt());
             }
 
             public Format[] newArray(int size) {

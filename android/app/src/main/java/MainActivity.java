@@ -1,6 +1,7 @@
 package io.rootmos.audiojournal;
 
 import static io.rootmos.audiojournal.Common.TAG;
+import io.rootmos.audiojournal.databinding.ActivityMainBinding;
 
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -31,15 +32,17 @@ import android.os.IBinder;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.MenuInflater;
 import android.widget.BaseAdapter;
 import android.widget.ImageButton;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
+import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
-
-import androidx.core.app.ActivityCompat;
 
 import net.sourceforge.javaflacencoder.FLACEncoder;
 import net.sourceforge.javaflacencoder.FLACFileOutputStream;
@@ -55,8 +58,10 @@ import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 
-public class MainActivity extends Activity implements
+public class MainActivity extends AppCompatActivity implements
     RecordingService.OnStateChangeListener {
+
+    private ActivityMainBinding binding = null;
 
     private enum State {
         IDLE, RECORDING, PLAYING
@@ -80,8 +85,6 @@ public class MainActivity extends Activity implements
         }
     };
 
-    private ExtendedFloatingActionButton fab = null;
-
     private SoundsAdapter sa = new SoundsAdapter();
     private SoundItem active_sound = null;
 
@@ -92,14 +95,13 @@ public class MainActivity extends Activity implements
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
+        binding = ActivityMainBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
         Log.i(TAG, "creating main activity");
 
-        ((ListView)findViewById(R.id.sounds)).setAdapter(sa);
+        binding.sounds.setAdapter(sa);
 
-        fab = (ExtendedFloatingActionButton)
-            findViewById(R.id.start_stop_recording);
-        fab.setOnClickListener(new View.OnClickListener() {
+        binding.fab.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 startActivity(new Intent(MainActivity.this,
                             RecordingActivity.class));
@@ -108,6 +110,29 @@ public class MainActivity extends Activity implements
 
         s3 = new AmazonS3Client(AWSAuth.getAuth(),
                 Region.getRegion(settings.getBucketRegion()));
+
+        setSupportActionBar(binding.appbar.getRoot());
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        MenuInflater inflater = getMenuInflater();
+        inflater.inflate(R.menu.activity_main_appbar, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        switch (item.getItemId()) {
+            case R.id.manage_templates:
+                startActivity(new Intent(this, ListTemplatesActivity.class));
+                return true;
+            case R.id.record:
+                startActivity(new Intent(this, RecordingActivity.class));
+                return true;
+            default:
+                return super.onOptionsItemSelected(item);
+        }
     }
 
     @Override
@@ -152,12 +177,12 @@ public class MainActivity extends Activity implements
                 stop_playing();
             }
             state = State.RECORDING;
-            fab.setText(getText(R.string.stop_recording));
-            fab.setIcon(getDrawable(R.drawable.stop_recording));
+            binding.fab.setText(getText(R.string.stop_recording));
+            binding.fab.setIcon(getDrawable(R.drawable.stop_recording));
         } else {
             if(state == State.RECORDING) state = State.IDLE;
-            fab.setText(getText(R.string.start_recording));
-            fab.setIcon(getDrawable(R.drawable.start_recording));
+            binding.fab.setText(getText(R.string.start_recording));
+            binding.fab.setIcon(getDrawable(R.drawable.start_recording));
         }
     }
 
