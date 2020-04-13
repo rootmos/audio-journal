@@ -70,9 +70,11 @@ public class RecordingActivity extends Activity implements
 
         template = getIntent().getParcelableExtra("template");
         if(template == null) {
-            triggerTemplateChange();
+            template = settings.getDefaultTemplate();
+            if(template == null) {
+                triggerTemplateChange();
+            }
         }
-
 
         binding.status.getRoot().setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {

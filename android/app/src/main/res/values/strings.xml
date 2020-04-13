@@ -24,6 +24,7 @@
     <string name="manage_templates">Manage templates</string>
     <string name="choose_template">Choose template</string>
     <string name="record_using_template">Record using this template</string>
+    <string name="use_as_default_template">Use as default template</string>
     <string name="mp3">MP3</string>
     <string name="flac">FLAC</string>
     <string name="done">Done</string>

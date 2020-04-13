@@ -24,6 +24,7 @@ import android.widget.BaseAdapter;
 import androidx.appcompat.app.AppCompatActivity;
 
 public class ListTemplatesActivity extends AppCompatActivity {
+    private Settings settings = new Settings(this);
     private ListTemplatesBinding binding = null;
     private TemplatesAdapter ta = new TemplatesAdapter();
     private TemplateItem active_template = null;
@@ -37,7 +38,7 @@ public class ListTemplatesActivity extends AppCompatActivity {
         setContentView(binding.getRoot());
         Log.i(TAG, "creating list templates activity");
 
-        ta.addTemplates(loadSavedTemplates());
+        ta.addTemplates(settings.loadTemplates());
 
         binding.templates.setAdapter(ta);
 
@@ -122,26 +123,6 @@ public class ListTemplatesActivity extends AppCompatActivity {
         finish();
     }
 
-    private MetadataTemplate[] loadSavedTemplates() {
-        Set<String> ss = Common.getPreferences(this)
-            .getStringSet("templates", new HashSet<String>());
-        ArrayList<MetadataTemplate> ms = new ArrayList<>();
-        for(String s : ss) {
-            ms.add(MetadataTemplate.fromJSON(s));
-        }
-        return ms.toArray(new MetadataTemplate[0]);
-    }
-
-    private void saveTemplates(Collection<MetadataTemplate> ms) {
-        HashSet<String> ss = new HashSet<>(ms.size());
-        for(MetadataTemplate t : ms) {
-            ss.add(t.toJSON());
-        }
-
-        Common.getPreferences(this).edit()
-            .putStringSet("templates", ss).apply();
-    }
-
     private class TemplatesAdapter extends BaseAdapter {
         ArrayList<TemplateItem> ts = new ArrayList<>();
 
@@ -213,6 +194,9 @@ public class ListTemplatesActivity extends AppCompatActivity {
             case R.id.delete_template:
                 remove(active_template);
                 return true;
+            case R.id.use_as_default_template:
+                settings.setDefaultTemplate(active_template.t);
+                return true;
             default:
                 return super.onContextItemSelected(i);
         }
@@ -228,7 +212,11 @@ public class ListTemplatesActivity extends AppCompatActivity {
                 active_template.update(t);
             }
 
-            saveTemplates(ta.getTemplates());
+            settings.saveTemplates(ta.getTemplates());
+
+            if(ta.getCount() == 1) {
+                settings.setDefaultTemplate(t);
+            }
         }
     }
 
@@ -252,6 +240,15 @@ public class ListTemplatesActivity extends AppCompatActivity {
     private void remove(TemplateItem t) {
         Log.i(TAG, "removing template: " + t.t.getId());
         ta.remove(t);
-        saveTemplates(ta.getTemplates());
+
+        if(ta.getCount() == 0) {
+            settings.setDefaultTemplate(null);
+        } else {
+            if(settings.getDefaultTemplateId().equals(t.t.getId())) {
+                settings.setDefaultTemplate(null);
+            }
+        }
+
+        settings.saveTemplates(ta.getTemplates());
     }
 }
