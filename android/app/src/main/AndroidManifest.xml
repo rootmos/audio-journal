@@ -7,8 +7,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <application
-        android:label="AudioJournal"
-        android:theme="@style/Theme.MaterialComponents.Light"
+        android:label="@string/application"
+        android:theme="@style/Theme.MaterialComponents.Light.NoActionBar"
         android:icon="@mipmap/audio_journal"
         android:allowBackup="false"
         tools:replace="android:allowBackup,android:label">
@@ -18,12 +18,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".RecordingActivity"
+        <activity
+            android:name=".RecordingActivity"
             android:parentActivityName=".MainActivity"
             android:exported="true" />
-        <activity android:name=".ListTemplatesActivity"
-            android:parentActivityName=".RecordingActivity" />
-        <activity android:name=".EditTemplateActivity"
+        <activity
+            android:name=".ListTemplatesActivity"
+            android:label="@string/manage_templates"
+            android:parentActivityName=".MainActivity" />
+        <activity
+            android:name=".EditTemplateActivity"
+            android:label="@string/edit_template"
             android:parentActivityName=".ListTemplatesActivity" />
         <service android:name=".RecordingService" />
         <provider

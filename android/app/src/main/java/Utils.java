@@ -2,6 +2,7 @@ package io.rootmos.audiojournal;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Random;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -51,5 +52,9 @@ public class Utils {
             .divide(new BigDecimal(channels))
             .divide(new BigDecimal(sampleRate), 9, RoundingMode.HALF_UP)
             .floatValue();
+    }
+
+    public static int freshRequestCode() {
+        return new Random().nextInt() & 0xffff;
     }
 }

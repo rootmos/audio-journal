@@ -9,7 +9,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.Random;
 import java.util.ArrayList;
 
 import android.Manifest;
@@ -36,8 +35,7 @@ public class RecordingActivity extends Activity implements
 
     private Settings settings = new Settings(this);
 
-    private final int changeTemplateRequestId =
-        Math.abs(new Random().nextInt());
+    private final int changeTemplateRequestId = Utils.freshRequestCode();
     private MetadataTemplate template = null;
 
     private RecordingService.Binder rs = null;
@@ -72,18 +70,7 @@ public class RecordingActivity extends Activity implements
 
         template = getIntent().getParcelableExtra("template");
         if(template == null) {
-            if(savedInstanceState != null) {
-                ArrayList<MetadataTemplate> ts =
-                    savedInstanceState.getParcelableArrayList("templates");
-                if(ts == null || ts.isEmpty()) {
-                    triggerTemplateChange();
-                } else {
-                    // TODO: make default configurable
-                    template = ts.get(0);
-                }
-            } else {
-                triggerTemplateChange();
-            }
+            triggerTemplateChange();
         }
 
 
@@ -110,6 +97,7 @@ public class RecordingActivity extends Activity implements
 
     public void triggerTemplateChange() {
         Intent i = new Intent(this, ListTemplatesActivity.class);
+        i.putExtra("choose", true);
         startActivityForResult(i, changeTemplateRequestId);
     }
 

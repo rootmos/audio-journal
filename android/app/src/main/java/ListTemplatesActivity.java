@@ -6,30 +6,29 @@ import io.rootmos.audiojournal.databinding.TemplateItemBinding;
 
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Random;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.Collection;
 
-import android.app.Activity;
 import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ContextMenu;
+import android.view.Menu;
 import android.view.MenuInflater;
-import android.view.MenuItem;
 import android.view.MenuItem;
 import android.widget.AdapterView.AdapterContextMenuInfo;
 import android.widget.BaseAdapter;
+import androidx.appcompat.app.AppCompatActivity;
 
-public class ListTemplatesActivity extends Activity {
+public class ListTemplatesActivity extends AppCompatActivity {
     private ListTemplatesBinding binding = null;
     private TemplatesAdapter ta = new TemplatesAdapter();
     private TemplateItem active_template = null;
 
-    private final int editTemplateRequestId = Math.abs(new Random().nextInt());
+    private final int editTemplateRequestId = Utils.freshRequestCode();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -42,8 +41,30 @@ public class ListTemplatesActivity extends Activity {
 
         binding.templates.setAdapter(ta);
 
-        binding.add.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { add(); } });
+        setSupportActionBar(binding.appbar.getRoot());
+        getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+
+        if(getIntent().getBooleanExtra("choose", false)) {
+            setTitle(R.string.choose_template);
+        }
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        MenuInflater inflater = getMenuInflater();
+        inflater.inflate(R.menu.list_templates_appbar, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        switch (item.getItemId()) {
+            case R.id.add:
+                add();
+                return true;
+            default:
+                return super.onOptionsItemSelected(item);
+        }
     }
 
     @Override
@@ -186,16 +207,12 @@ public class ListTemplatesActivity extends Activity {
             case R.id.record_using_template:
                 returnTemplate(active_template.t);
                 return true;
-            case R.id.edit_template: {
-                Intent I = new Intent(this, EditTemplateActivity.class);
-                I.putExtra("template", active_template.t);
-                startActivityForResult(I, editTemplateRequestId);
+            case R.id.edit_template:
+                edit(active_template);
                 return true;
-            }
-            case R.id.delete_template: {
+            case R.id.delete_template:
                 remove(active_template);
                 return true;
-            }
             default:
                 return super.onContextItemSelected(i);
         }
@@ -221,6 +238,14 @@ public class ListTemplatesActivity extends Activity {
         MetadataTemplate t = MetadataTemplate.freshEmpty();
         Intent I = new Intent(this, EditTemplateActivity.class);
         I.putExtra("template", t);
+        I.putExtra("new", true);
+        startActivityForResult(I, editTemplateRequestId);
+    }
+
+    private void edit(TemplateItem t) {
+        Intent I = new Intent(this, EditTemplateActivity.class);
+        I.putExtra("template", t.t);
+        I.putExtra("new", false);
         startActivityForResult(I, editTemplateRequestId);
     }
 
