@@ -1,6 +1,7 @@
 package io.rootmos.audiojournal;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 
@@ -22,5 +23,9 @@ public class Common {
             }
             return notificationChannel;
         }
+    }
+
+    public static SharedPreferences getPreferences(Context ctx) {
+        return ctx.getSharedPreferences("preferences", Context.MODE_PRIVATE);
     }
 }

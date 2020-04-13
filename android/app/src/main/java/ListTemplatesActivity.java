@@ -7,6 +7,9 @@ import io.rootmos.audiojournal.databinding.TemplateItemBinding;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Random;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Collection;
 
 import android.app.Activity;
 import android.content.Intent;
@@ -26,7 +29,7 @@ public class ListTemplatesActivity extends Activity {
     private TemplatesAdapter ta = new TemplatesAdapter();
     private TemplateItem active_template = null;
 
-    private int editTemplateRequestId = new Random().nextInt();
+    private final int editTemplateRequestId = Math.abs(new Random().nextInt());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -35,11 +38,7 @@ public class ListTemplatesActivity extends Activity {
         setContentView(binding.getRoot());
         Log.i(TAG, "creating list templates activity");
 
-        if(savedInstanceState != null) {
-            ArrayList<MetadataTemplate> ts =
-                savedInstanceState.getParcelableArrayList("templates");
-            ta.addTemplates(ts.toArray(new MetadataTemplate[0]));
-        }
+        ta.addTemplates(loadSavedTemplates());
 
         binding.templates.setAdapter(ta);
 
@@ -65,6 +64,8 @@ public class ListTemplatesActivity extends Activity {
             this.t = t;
 
             binding.titleTemplateValue.setText(t.getTitle());
+            binding.artistValue.setText(t.getArtist());
+            binding.composerValue.setText(t.getComposer());
             binding.prefixValue.setText(t.getPrefix().toString());
             binding.formatValue.setText(t.getFormat().toString());
         }
@@ -100,6 +101,26 @@ public class ListTemplatesActivity extends Activity {
         finish();
     }
 
+    private MetadataTemplate[] loadSavedTemplates() {
+        Set<String> ss = Common.getPreferences(this)
+            .getStringSet("templates", new HashSet<String>());
+        ArrayList<MetadataTemplate> ms = new ArrayList<>();
+        for(String s : ss) {
+            ms.add(MetadataTemplate.fromJSON(s));
+        }
+        return ms.toArray(new MetadataTemplate[0]);
+    }
+
+    private void saveTemplates(Collection<MetadataTemplate> ms) {
+        HashSet<String> ss = new HashSet<>(ms.size());
+        for(MetadataTemplate t : ms) {
+            ss.add(t.toJSON());
+        }
+
+        Common.getPreferences(this).edit()
+            .putStringSet("templates", ss).apply();
+    }
+
     private class TemplatesAdapter extends BaseAdapter {
         ArrayList<TemplateItem> ts = new ArrayList<>();
 
@@ -118,11 +139,11 @@ public class ListTemplatesActivity extends Activity {
             return null;
         }
 
-        public ArrayList<MetadataTemplate> getTemplates() {
-            ArrayList<MetadataTemplate> ms =
-                new ArrayList<>(ts.size());
+        public Set<MetadataTemplate> getTemplates() {
+            HashSet<MetadataTemplate> ms =
+                new HashSet<>(ts.size());
             for(int i = 0; i < ts.size(); ++i) {
-                ms.set(i, ts.get(i).t);
+                ms.add(ts.get(i).t);
             }
             return ms;
         }
@@ -182,6 +203,8 @@ public class ListTemplatesActivity extends Activity {
             } else {
                 active_template.update(t);
             }
+
+            saveTemplates(ta.getTemplates());
         }
     }
 
@@ -192,13 +215,5 @@ public class ListTemplatesActivity extends Activity {
         Intent I = new Intent(this, EditTemplateActivity.class);
         I.putExtra("template", t);
         startActivityForResult(I, editTemplateRequestId);
-    }
-
-    @Override
-    public void onSaveInstanceState(Bundle savedInstanceState) {
-        super.onSaveInstanceState(savedInstanceState);
-
-        savedInstanceState.putParcelableArrayList(
-                "templates", ta.getTemplates());
     }
 }

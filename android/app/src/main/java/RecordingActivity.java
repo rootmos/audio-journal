@@ -36,7 +36,8 @@ public class RecordingActivity extends Activity implements
 
     private Settings settings = new Settings(this);
 
-    private int changeTemplateRequestId = new Random().nextInt();
+    private final int changeTemplateRequestId =
+        Math.abs(new Random().nextInt());
     private MetadataTemplate template = null;
 
     private RecordingService.Binder rs = null;

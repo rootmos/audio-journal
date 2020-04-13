@@ -25,6 +25,8 @@ public class EditTemplateActivity extends Activity {
 
         t = getIntent().getParcelableExtra("template");
 
+        Log.i(TAG, "editing template: " + t.getId());
+
         binding.artistValue.setText(t.getArtist());
         binding.composerValue.setText(t.getComposer());
         binding.titleTemplateValue.setText(t.getTitle());
@@ -43,7 +45,15 @@ public class EditTemplateActivity extends Activity {
             public void onClick(View v) { done(); } });
     }
 
+    @Override
+    protected void onStop() {
+        super.onStop();
+        Log.i(TAG, "stopping edit template activity");
+    }
+
     private void done() {
+        Log.i(TAG, "done editing template: " + t.getId());
+
         Format f = null;
         int fi = binding.formatValue.getCheckedRadioButtonId();
         if(fi == binding.formatValueFlac.getId()) {

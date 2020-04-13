@@ -22,6 +22,42 @@
 	    	android:layout_width="wrap_content"
 	    	android:layout_height="match_parent" />
 	</TableRow>
+
+	<TableRow
+		android:id="@+id/artist"
+		android:layout_width="match_parent"
+		android:layout_height="match_parent">
+	
+		<TextView
+			style="@style/metadata_label"
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:text="@string/artist_label" />
+		
+		<TextView
+			android:id="@+id/artist_value"
+			style="@style/metadata_content"
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content" />
+	</TableRow>
+
+	<TableRow
+		android:id="@+id/composer"
+		android:layout_width="match_parent"
+		android:layout_height="match_parent">
+	
+		<TextView
+			style="@style/metadata_label"
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content"
+			android:text="@string/composer_label" />
+		
+		<TextView
+			android:id="@+id/composer_value"
+			style="@style/metadata_content"
+			android:layout_width="wrap_content"
+			android:layout_height="wrap_content" />
+	</TableRow>
 	
 	<TableRow
 		android:id="@+id/prefix"

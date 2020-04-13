@@ -22,16 +22,18 @@ import org.jaudiotagger.tag.Tag;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.codec.digest.MessageDigestAlgorithms;
 
+import org.json.JSONTokener;
+import org.json.JSONObject;
+import org.json.JSONException;
+
 class MetadataTemplate implements Parcelable {
     private UUID id = null;
     private String title = null;
     private String artist = null;
     private String composer = null;
-
     private String prefix = null;
     private String filename = null;
     private String suffix = null;
-
     private Format format = null;
 
     public MetadataTemplate(
@@ -92,8 +94,8 @@ class MetadataTemplate implements Parcelable {
         out.writeString(artist);
         out.writeString(composer);
         out.writeTypedObject(format, flags);
-        out.writeString(prefix != null ? prefix.toString() : null);
-        out.writeString(filename != null ? filename.toString() : null);
+        out.writeString(prefix);
+        out.writeString(filename);
     }
 
     public static final Parcelable.Creator<MetadataTemplate> CREATOR =
@@ -195,5 +197,48 @@ class MetadataTemplate implements Parcelable {
             throw new RuntimeException(
                     "exception while rendering local file: " + dest, e);
         }
+    }
+
+    public String toJSON() {
+        JSONObject j = new JSONObject();
+        try {
+            j.put("id", id.toString());
+            j.put("title", title);
+            j.put("artist", artist);
+            j.put("composer", composer);
+            j.put("prefix", prefix);
+            j.put("filename", filename);
+            j.put("format", format.toString());
+        } catch(JSONException e) {
+            throw new RuntimeException("unable to populate JSON object", e);
+        }
+        return j.toString();
+    }
+
+    static public MetadataTemplate fromJSON(String raw) {
+        JSONObject j = null;
+        try {
+            j = (JSONObject) new JSONTokener(raw).nextValue();
+        } catch(JSONException e) {
+            throw new RuntimeException("unable to parse object content", e);
+        } catch(ClassCastException e) {
+            throw new RuntimeException("expected JSON object not present", e);
+        }
+
+        MetadataTemplate t = null;
+        try {
+            t = new MetadataTemplate(
+                    UUID.fromString(j.getString("id")),
+                    j.getString("title"),
+                    j.getString("artist"),
+                    j.getString("composer"),
+                    Format.fromString(j.getString("format")));
+            t.setPrefix(j.getString("prefix"));
+            t.setFilename(j.getString("filename"));
+        } catch(JSONException e) {
+            throw new RuntimeException("illstructured JSON content", e);
+        }
+
+        return t;
     }
 }
