@@ -9,8 +9,14 @@ ADB ?= $(ANDROID_SDK_ROOT)/platform-tools/adb
 build: $(ANDROID_SDK_ROOT)
 	@$(GRADLE) $(GRADLE_OPTS) build
 
+release: $(ANDROID_SDK_ROOT)
+	@$(GRADLE) $(GRADLE_OPTS) assembleRelease
+
 install: $(ANDROID_SDK_ROOT)
 	@$(GRADLE) $(GRADLE_OPTS) installDebug
+
+install-release: release
+	@$(ADB) install app/build/outputs/apk/release/app-release.apk
 
 start:
 	@$(ADB) shell am start -n io.rootmos.audiojournal/.MainActivity
@@ -40,5 +46,5 @@ prepare-emulator: $(ANDROID_SDK_ROOT)
 run-emulator:
 	$(ANDROID_SDK_ROOT)/tools/emulator -avd $(AVD)
 
-.PHONY: build install clean
+.PHONY: build release install start clean
 .PHONY: logs prepare-emulator run-emulator
