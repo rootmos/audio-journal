@@ -7,3 +7,6 @@
 -dontwarn org.apache.http.**
 -dontwarn com.amazonaws.http.**
 -dontwarn com.amazonaws.metrics.**
+
+-dontwarn org.jaudiotagger.**
+-keep class org.jaudiotagger.** { *; }
