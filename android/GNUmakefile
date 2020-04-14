@@ -1,10 +1,11 @@
 GRADLE ?= gradle
 GRADLE_OPTS ?= --warning-mode=none --console=plain
+export ADB_OPTS ?=
 export ANDROID_SDK_ROOT = $(shell pwd)/sdk
 export ANDROID_SDK_HOME = $(shell pwd)
 export ANDROID_HOME = $(ANDROID_SDK_ROOT)
 ANDROID_SDK_BIN = $(ANDROID_SDK_ROOT)/tools/bin
-ADB ?= $(ANDROID_SDK_ROOT)/platform-tools/adb
+export ADB ?= $(ANDROID_SDK_ROOT)/platform-tools/adb
 
 build: $(ANDROID_SDK_ROOT)
 	@$(GRADLE) $(GRADLE_OPTS) build
@@ -16,10 +17,10 @@ install: $(ANDROID_SDK_ROOT)
 	@$(GRADLE) $(GRADLE_OPTS) installDebug
 
 install-release: release
-	@$(ADB) install app/build/outputs/apk/release/app-release.apk
+	@$(ADB) $(ADB_OPTS) install app/build/outputs/apk/release/app-release.apk
 
 start:
-	@$(ADB) shell am start -n io.rootmos.audiojournal/.MainActivity
+	@$(ADB) $(ADB_OPTS) shell am start -n io.rootmos.audiojournal/.MainActivity
 
 $(ANDROID_SDK_ROOT):
 	./sdk.sh "$@"
@@ -29,7 +30,10 @@ clean:
 
 LOG_LEVEL ?= I
 logs:
-	adb logcat AudioJournal:$(LOG_LEVEL) AndroidRuntime:E *:S
+	@$(ADB) $(ADB_OPTS) logcat AudioJournal:$(LOG_LEVEL) AndroidRuntime:E *:S
+
+screenshots:
+	./screenshots.sh
 
 AVD=audio-journal-avd
 SDK_ID=system-images;android-28;default;x86_64
@@ -46,5 +50,5 @@ prepare-emulator: $(ANDROID_SDK_ROOT)
 run-emulator:
 	$(ANDROID_SDK_ROOT)/tools/emulator -avd $(AVD)
 
-.PHONY: build release install start clean
+.PHONY: build release install start screenshots clean
 .PHONY: logs prepare-emulator run-emulator
