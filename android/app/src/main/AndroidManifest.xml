@@ -8,7 +8,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <application
         android:label="@string/application"
-        android:theme="@style/Theme.MaterialComponents.Light.NoActionBar"
+        android:theme="@style/app"
         android:icon="@mipmap/audio_journal"
         android:allowBackup="false"
         tools:replace="android:allowBackup,android:label">

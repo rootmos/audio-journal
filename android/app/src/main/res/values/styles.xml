@@ -1,5 +1,23 @@
-<resources>
-	<style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar" />
+<resources
+	xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:app="http://schemas.android.com/apk/res-auto">
+	<style name="app" parent="Theme.MaterialComponents.Light.NoActionBar">
+		<item name="colorPrimary">@color/primaryColor</item>
+		<item name="colorPrimaryVariant">@color/primaryLightColor</item>
+		<item name="colorOnPrimary">@color/primaryTextColor</item>
+		<item name="colorSecondary">@color/primaryDarkColor</item>
+		<item name="colorSecondaryVariant">@color/primaryColor</item>
+		<item name="colorOnSecondary">@color/primaryTextColor</item>
+		<item name="colorPrimaryDark">@color/primaryDarkColor</item>
+	</style>
+
+	<style name="fab">
+		<item name="layout_constraintBottom_toBottomOf">parent</item>
+		<item name="layout_constraintEnd_toEndOf">parent</item>
+		<item name="android:layout_gravity">end|bottom</item>
+		<item name="backgroundTint">?attr/colorPrimaryVariant</item>
+		<item name="android:layout_margin">16dp</item>
+	</style>
 
 	<style name="metadata_label">
 		<item name="android:paddingRight">10dp</item>
