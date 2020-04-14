@@ -1,1 +1,4 @@
 app/src/main/java/AWSAuth.java filter=git-crypt diff=git-crypt
+.keys/*.sec filter=git-crypt diff=git-crypt
+.keys/*.pwd filter=git-crypt diff=git-crypt
+.keys/*.pkcs12 filter=git-crypt diff=git-crypt
