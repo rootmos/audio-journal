@@ -54,9 +54,10 @@ options:
 mode:
     -s       jam sesssion (default)
     -p       practice
-    -r       release
+    -R       release
     -m MODE  custom mode
 EOF
+    exit 0
 fi
 
 # functions
