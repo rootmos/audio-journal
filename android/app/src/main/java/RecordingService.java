@@ -23,6 +23,7 @@ import android.content.Context;
 import android.content.ServiceConnection;
 import android.app.PendingIntent;
 import android.app.Notification;
+import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.TaskStackBuilder;
 import android.util.Log;
@@ -158,13 +159,13 @@ public class RecordingService extends Service {
 
     @Override
     public void onRebind(Intent intent) {
-        Log.i(TAG, "clients have reconnected");
+        Log.i(TAG, "clients have reconnected to the recording service");
         stopWhenNotRecording = false;
     }
 
     @Override
     public boolean onUnbind(Intent intent) {
-        Log.i(TAG, "no more bound clients: recording=" + isRecording());
+        Log.i(TAG, "no more clients bound to recording service: recording=" + isRecording());
         if(!isRecording()) stopSelf();
         stopWhenNotRecording = true;
         return true;
@@ -181,8 +182,12 @@ public class RecordingService extends Service {
             R.drawable.stop_recording, getText(R.string.stop_recording), ps)
             .build();
 
-        Notification.Builder b = new Notification.Builder(
-                this, Common.getNotificationChannel(this).getId())
+        NotificationChannel nc = new NotificationChannel(
+                "AUDIO_JOURNAL_LIVE", "Recording status",
+                NotificationManager.IMPORTANCE_HIGH);
+        nm.createNotificationChannel(nc);
+
+        Notification.Builder b = new Notification.Builder(this, nc.getId())
             .setSmallIcon(R.mipmap.audio_journal)
             .setSubText("recording...")
             .setContentIntent(p)
