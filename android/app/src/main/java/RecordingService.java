@@ -225,11 +225,15 @@ public class RecordingService extends Service {
         }
     }
 
-    private void stopped(Sound s) {
+    private void stopped(MetadataTemplate mt, Sound s) {
         recordTask = null;
         stopForeground(STOP_FOREGROUND_REMOVE);
         for(OnStateChangeListener l : stateListeners) {
             l.recordingCompleted(s);
+        }
+
+        if(mt.getAutoUpload()) {
+            UploadService.upload(this, s);
         }
 
         if(stopWhenNotRecording) {
@@ -444,7 +448,7 @@ public class RecordingService extends Service {
 
         @Override
         protected void onPostExecute(Sound s) {
-            stopped(s);
+            stopped(template, s);
         }
 
         @Override
