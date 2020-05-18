@@ -308,6 +308,7 @@ public class MainActivity extends AppCompatActivity implements
                 play_sound(this);
             } else if(w == upload) {
                 UploadService.upload(ctx, s);
+                upload.setVisibility(View.GONE);
             } else if(w == share) {
                 startActivity(s.getShareIntent(ctx));
             } else {

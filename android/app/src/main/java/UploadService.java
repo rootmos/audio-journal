@@ -136,10 +136,10 @@ public class UploadService extends Service {
             try {
                 switch(e.getEventCode()) {
                     case 0: // uhm?
+                        sum += e.getBytesTransferred();
                         Log.i(TAG, String.format(
                                     "upload progress (%s): bytes=%d",
-                                    sha1, e.getBytesTransferred()));
-                        sum += e.getBytesTransferred();
+                                    sha1, sum));
                         UploadService.this.notify(s, (int)(100*sum/total));
                         break;
                     default:
