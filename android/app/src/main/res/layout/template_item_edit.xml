@@ -125,5 +125,20 @@
                     android:text="@string/flac" />
             </RadioGroup>
         </TableRow>
+
+	    <TableRow
+	    	android:layout_width="match_parent"
+	    	android:layout_height="match_parent">
+
+	    	<TextView
+	    		style="@style/metadata_label"
+	    		android:layout_width="wrap_content"
+	    		android:layout_height="wrap_content"
+	    		android:text="@string/auto_upload_label" />
+
+	    	<CheckBox
+	    		android:id="@+id/auto_upload_value"
+	    		style="@style/metadata_content" />
+	    </TableRow>
     </TableLayout>
 </LinearLayout>

@@ -18,6 +18,7 @@
     <string name="prefix_label">Prefix:</string>
     <string name="format_label">Format:</string>
     <string name="filename_label">Filename:</string>
+    <string name="auto_upload_label">Upload automatically:</string>
     <string name="delete_template">Delete template</string>
     <string name="edit_template">Edit template</string>
     <string name="add_template">Add template</string>
