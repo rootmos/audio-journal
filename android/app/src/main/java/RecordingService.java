@@ -184,7 +184,7 @@ public class RecordingService extends Service {
 
         NotificationChannel nc = new NotificationChannel(
                 "AUDIO_JOURNAL_LIVE", "Recording status",
-                NotificationManager.IMPORTANCE_HIGH);
+                NotificationManager.IMPORTANCE_LOW);
         nm.createNotificationChannel(nc);
 
         Notification.Builder b = new Notification.Builder(this, nc.getId())
