@@ -41,6 +41,7 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 
@@ -49,17 +50,15 @@ import net.sourceforge.javaflacencoder.FLACFileOutputStream;
 import net.sourceforge.javaflacencoder.StreamConfiguration;
 import net.sourceforge.javaflacencoder.EncodingConfiguration;
 
-import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.regions.Region;
 import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.model.CannedAccessControlList;
 import com.amazonaws.services.s3.model.GetObjectRequest;
-import com.amazonaws.services.s3.model.ObjectListing;
-import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 
 public class MainActivity extends AppCompatActivity implements
-    RecordingService.OnStateChangeListener {
+    RecordingService.OnStateChangeListener,
+    SwipeRefreshLayout.OnRefreshListener {
 
     private ActivityMainBinding binding = null;
 
@@ -108,6 +107,8 @@ public class MainActivity extends AppCompatActivity implements
             }
         });
 
+        binding.refreshLayout.setOnRefreshListener(this);
+
         s3 = new AmazonS3Client(AWSAuth.getAuth(),
                 Region.getRegion(settings.getBucketRegion()));
 
@@ -130,6 +131,9 @@ public class MainActivity extends AppCompatActivity implements
             case R.id.record:
                 startActivity(new Intent(this, RecordingActivity.class));
                 return true;
+            case R.id.refresh:
+                onRefresh();
+                return true;
             default:
                 return super.onOptionsItemSelected(item);
         }
@@ -150,6 +154,13 @@ public class MainActivity extends AppCompatActivity implements
 
         RecordingService.bind(this, sc);
 
+        new ListSoundsTask(this).execute();
+    }
+
+    @Override
+    public void onRefresh() {
+        Log.d(TAG, "refreshing");
+        sa.empty();
         new ListSoundsTask(this).execute();
     }
 
@@ -223,12 +234,7 @@ public class MainActivity extends AppCompatActivity implements
         Log.i(TAG, "state transition: playing -> idle");
     }
 
-    private void upload_sound(SoundItem s) {
-        Log.d(TAG, "preparing to upload sound: " + s.getSound().getLocal());
-        new UploadTask(this).execute(s);
-    }
-
-    private class ListSoundsTask extends AsyncTask<Void, Sound, List<Sound>> {
+    private class ListSoundsTask extends AsyncTask<Void, Sound, Boolean> {
         Context ctx = null;
 
         public ListSoundsTask(Context ctx) {
@@ -236,7 +242,7 @@ public class MainActivity extends AppCompatActivity implements
         }
 
         @Override
-        protected List<Sound> doInBackground(Void... params) {
+        protected Boolean doInBackground(Void... params) {
             ArrayList<Sound> ss = new ArrayList<>();
 
             for(Sound s : Sound.scanDir(settings.getBaseDir())) {
@@ -276,12 +282,17 @@ public class MainActivity extends AppCompatActivity implements
                 }
 
             }
-            return ss;
+            return true;
         }
 
         @Override
         protected void onProgressUpdate(Sound... sounds) {
             sa.addSounds(ctx, sounds);
+        }
+
+        @Override
+        protected void onPostExecute(Boolean res) {
+            binding.refreshLayout.setRefreshing(false);
         }
     }
 
@@ -315,7 +326,8 @@ public class MainActivity extends AppCompatActivity implements
             if(w == play) {
                 play_sound(this);
             } else if(w == upload) {
-                upload_sound(this);
+                UploadService.upload(ctx, s);
+                upload.setVisibility(View.GONE);
             } else if(w == share) {
                 startActivity(s.getShareIntent(ctx));
             } else {
@@ -487,10 +499,6 @@ public class MainActivity extends AppCompatActivity implements
                     Toast.LENGTH_SHORT).show();
         }
 
-        public void uploaded() {
-            upload.setVisibility(View.GONE);
-        }
-
         public void merge(Sound o) {
             s.merge(o);
 
@@ -506,6 +514,11 @@ public class MainActivity extends AppCompatActivity implements
 
     private class SoundsAdapter extends BaseAdapter {
         ArrayList<SoundItem> ss = new ArrayList<>();
+
+        public void empty() {
+            ss.clear();
+            notifyDataSetChanged();
+        }
 
         public void addSounds(Context ctx, Sound... sounds) {
             for(Sound s : sounds) {
@@ -547,52 +560,6 @@ public class MainActivity extends AppCompatActivity implements
         @Override
         public View getView(int i, View v, ViewGroup vg) {
             return ss.get(i).getView(vg);
-        }
-    }
-
-    private class UploadTask extends AsyncTask<SoundItem, SoundItem, Boolean> {
-        private Context ctx = null;
-
-        public UploadTask(Context ctx) {
-            this.ctx = ctx;
-        }
-
-        @Override
-        protected Boolean doInBackground(SoundItem... ss) {
-            for(SoundItem si : ss) {
-                Sound s = si.getSound();
-                // TODO: use prefix?
-                Path r = settings.getBaseDir()
-                    .relativize(s.getLocal().getParent());
-                String bucket = settings.getBucketName();
-                String key = r.toString() + "/" + s.getFilename();
-                Log.d(TAG, String.format("uploading: s3://%s/%s", bucket, key));
-                s.setURI(Uri.parse(s3.getResourceUrl(bucket, key)));
-                s3.putObject(bucket, key, s.getLocal().toFile());
-                s3.setObjectAcl(bucket, key,
-                        CannedAccessControlList.PublicRead);
-
-                key = r.toString() + "/" + s.getMetadata().getFileName();
-                Log.d(TAG, String.format("uploading: s3://%s/%s", bucket, key));
-                Log.d(TAG, s.toJSON());
-                s3.putObject(bucket, key, s.toJSON());
-                s3.setObjectAcl(bucket, key,
-                        CannedAccessControlList.PublicRead);
-
-                publishProgress(si);
-            }
-            return Boolean.TRUE;
-        }
-
-        @Override
-        protected void onProgressUpdate(SoundItem... ss) {
-            for(SoundItem si : ss) {
-                Log.i(TAG, "uploaded: " + si.getSound().getURI());
-                Toast.makeText(ctx, "Uploaded: " + si.getSound().getTitle(),
-                        Toast.LENGTH_SHORT).show();
-
-                si.uploaded();
-            }
         }
     }
 }

@@ -25,12 +25,14 @@
         <activity
             android:name=".ListTemplatesActivity"
             android:label="@string/manage_templates"
-            android:parentActivityName=".MainActivity" />
+            android:parentActivityName=".MainActivity"
+            android:exported="true" />
         <activity
             android:name=".EditTemplateActivity"
             android:label="@string/edit_template"
             android:parentActivityName=".ListTemplatesActivity" />
         <service android:name=".RecordingService" />
+        <service android:name=".UploadService" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.provider"

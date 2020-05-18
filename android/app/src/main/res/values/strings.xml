@@ -8,6 +8,7 @@
     <string name="stop">Stop</string>
     <string name="upload">Upload</string>
     <string name="share">Share</string>
+    <string name="refresh">Refresh</string>
     <string name="artist_label">Artist:</string>
     <string name="composer_label">Composer:</string>
     <string name="duration_label">Duration:</string>
@@ -18,6 +19,7 @@
     <string name="prefix_label">Prefix:</string>
     <string name="format_label">Format:</string>
     <string name="filename_label">Filename:</string>
+    <string name="auto_upload_label">Upload automatically:</string>
     <string name="delete_template">Delete template</string>
     <string name="edit_template">Edit template</string>
     <string name="add_template">Add template</string>

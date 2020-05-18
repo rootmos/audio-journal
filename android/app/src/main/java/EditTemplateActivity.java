@@ -35,6 +35,7 @@ public class EditTemplateActivity extends AppCompatActivity {
         binding.titleTemplateValue.setText(t.getTitle());
         binding.prefixValue.setText(t.getPrefix().toString());
         binding.filenameValue.setText(t.getFilename());
+        binding.autoUploadValue.setChecked(t.getAutoUpload());
 
         if(t.getFormat() == Format.FLAC) {
             binding.formatValue.check(binding.formatValueFlac.getId());
@@ -94,9 +95,10 @@ public class EditTemplateActivity extends AppCompatActivity {
                 binding.titleTemplateValue.getText().toString(),
                 binding.artistValue.getText().toString(),
                 binding.composerValue.getText().toString(),
-                f);
-        n.setPrefix(binding.prefixValue.getText().toString());
-        n.setFilename(binding.filenameValue.getText().toString());
+                f,
+                binding.autoUploadValue.isChecked(),
+                binding.prefixValue.getText().toString(),
+                binding.filenameValue.getText().toString());
 
         Intent i = new Intent();
         i.putExtra("template", n);

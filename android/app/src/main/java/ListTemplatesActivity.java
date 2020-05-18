@@ -93,6 +93,7 @@ public class ListTemplatesActivity extends AppCompatActivity {
             binding.composerValue.setText(t.getComposer());
             binding.prefixValue.setText(t.getPrefix().toString());
             binding.formatValue.setText(t.getFormat().toString());
+            binding.autoUploadValue.setChecked(t.getAutoUpload());
         }
 
         public View getView(ViewGroup vg) {

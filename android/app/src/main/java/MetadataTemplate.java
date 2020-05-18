@@ -35,27 +35,34 @@ class MetadataTemplate implements Parcelable {
     private String filename = null;
     private String suffix = null;
     private Format format = null;
+    private boolean autoUpload = false;
 
     public MetadataTemplate(
             UUID id,
-            String title, String artist, String composer, Format format) {
+            String title, String artist, String composer,
+            Format format,
+            boolean autoUpload,
+            String prefix,
+            String filename) {
         this.id = id;
+
         this.title = title;
         this.artist = artist;
         this.composer = composer;
-
+        this.autoUpload = autoUpload;
+        this.filename = filename;
         this.format = format;
+        this.prefix = prefix;
         this.suffix = selectSuffix(this.format);
     }
 
     public static MetadataTemplate freshEmpty() {
-        MetadataTemplate t = new MetadataTemplate(
+        return new MetadataTemplate(
                 UUID.randomUUID(),
                 "", "", "",
-                Format.MP3);
-        t.setPrefix("");
-        t.setFilename("%t%s");
-        return t;
+                Format.MP3,
+                false,
+                "", "%t%s");
     }
 
     private String selectSuffix(Format format) {
@@ -80,9 +87,7 @@ class MetadataTemplate implements Parcelable {
     public String getPrefix() { return prefix; }
     public Format getFormat() { return format; }
     public String getFilename() { return filename; }
-
-    public void setPrefix(String prefix) { this.prefix = prefix; }
-    public void setFilename(String filename) { this.filename = filename; }
+    public boolean getAutoUpload() { return autoUpload; }
 
     @Override
     public int describeContents () { return 0; }
@@ -94,6 +99,7 @@ class MetadataTemplate implements Parcelable {
         out.writeString(artist);
         out.writeString(composer);
         out.writeTypedObject(format, flags);
+        out.writeInt(autoUpload ? 1 : 0);
         out.writeString(prefix);
         out.writeString(filename);
     }
@@ -101,16 +107,15 @@ class MetadataTemplate implements Parcelable {
     public static final Parcelable.Creator<MetadataTemplate> CREATOR =
         new Parcelable.Creator<MetadataTemplate>() {
             public MetadataTemplate createFromParcel(Parcel in) {
-                MetadataTemplate mt = new MetadataTemplate(
+                return new MetadataTemplate(
                         UUID.fromString(in.readString()),
                         in.readString(),
                         in.readString(),
                         in.readString(),
-                        in.readTypedObject(Format.CREATOR));
-                String prefix = in.readString();
-                if(prefix != null) mt.setPrefix(prefix);
-                mt.setFilename(in.readString());
-                return mt;
+                        in.readTypedObject(Format.CREATOR),
+                        in.readInt() > 0 ? true : false,
+                        in.readString(),
+                        in.readString());
             }
 
             public MetadataTemplate[] newArray(int size) {
@@ -209,6 +214,7 @@ class MetadataTemplate implements Parcelable {
             j.put("prefix", prefix);
             j.put("filename", filename);
             j.put("format", format.toString());
+            j.put("auto_upload", autoUpload);
         } catch(JSONException e) {
             throw new RuntimeException("unable to populate JSON object", e);
         }
@@ -225,20 +231,18 @@ class MetadataTemplate implements Parcelable {
             throw new RuntimeException("expected JSON object not present", e);
         }
 
-        MetadataTemplate t = null;
         try {
-            t = new MetadataTemplate(
+            return new MetadataTemplate(
                     UUID.fromString(j.getString("id")),
                     j.getString("title"),
                     j.getString("artist"),
                     j.getString("composer"),
-                    Format.fromString(j.getString("format")));
-            t.setPrefix(j.getString("prefix"));
-            t.setFilename(j.getString("filename"));
+                    Format.fromString(j.getString("format")),
+                    j.has("auto_upload") ? j.getBoolean("auto_upload") : false,
+                    j.getString("prefix"),
+                    j.getString("filename"));
         } catch(JSONException e) {
             throw new RuntimeException("illstructured JSON content", e);
         }
-
-        return t;
     }
 }
