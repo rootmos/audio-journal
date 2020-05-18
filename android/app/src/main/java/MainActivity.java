@@ -41,6 +41,7 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 
@@ -56,7 +57,8 @@ import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 
 public class MainActivity extends AppCompatActivity implements
-    RecordingService.OnStateChangeListener {
+    RecordingService.OnStateChangeListener,
+    SwipeRefreshLayout.OnRefreshListener {
 
     private ActivityMainBinding binding = null;
 
@@ -105,6 +107,8 @@ public class MainActivity extends AppCompatActivity implements
             }
         });
 
+        binding.refreshLayout.setOnRefreshListener(this);
+
         s3 = new AmazonS3Client(AWSAuth.getAuth(),
                 Region.getRegion(settings.getBucketRegion()));
 
@@ -127,6 +131,9 @@ public class MainActivity extends AppCompatActivity implements
             case R.id.record:
                 startActivity(new Intent(this, RecordingActivity.class));
                 return true;
+            case R.id.refresh:
+                onRefresh();
+                return true;
             default:
                 return super.onOptionsItemSelected(item);
         }
@@ -147,6 +154,13 @@ public class MainActivity extends AppCompatActivity implements
 
         RecordingService.bind(this, sc);
 
+        new ListSoundsTask(this).execute();
+    }
+
+    @Override
+    public void onRefresh() {
+        Log.d(TAG, "refreshing");
+        sa.empty();
         new ListSoundsTask(this).execute();
     }
 
@@ -220,7 +234,7 @@ public class MainActivity extends AppCompatActivity implements
         Log.i(TAG, "state transition: playing -> idle");
     }
 
-    private class ListSoundsTask extends AsyncTask<Void, Sound, List<Sound>> {
+    private class ListSoundsTask extends AsyncTask<Void, Sound, Boolean> {
         Context ctx = null;
 
         public ListSoundsTask(Context ctx) {
@@ -228,7 +242,7 @@ public class MainActivity extends AppCompatActivity implements
         }
 
         @Override
-        protected List<Sound> doInBackground(Void... params) {
+        protected Boolean doInBackground(Void... params) {
             ArrayList<Sound> ss = new ArrayList<>();
 
             for(Sound s : Sound.scanDir(settings.getBaseDir())) {
@@ -268,12 +282,17 @@ public class MainActivity extends AppCompatActivity implements
                 }
 
             }
-            return ss;
+            return true;
         }
 
         @Override
         protected void onProgressUpdate(Sound... sounds) {
             sa.addSounds(ctx, sounds);
+        }
+
+        @Override
+        protected void onPostExecute(Boolean res) {
+            binding.refreshLayout.setRefreshing(false);
         }
     }
 
@@ -480,10 +499,6 @@ public class MainActivity extends AppCompatActivity implements
                     Toast.LENGTH_SHORT).show();
         }
 
-        public void uploaded() {
-            upload.setVisibility(View.GONE);
-        }
-
         public void merge(Sound o) {
             s.merge(o);
 
@@ -499,6 +514,11 @@ public class MainActivity extends AppCompatActivity implements
 
     private class SoundsAdapter extends BaseAdapter {
         ArrayList<SoundItem> ss = new ArrayList<>();
+
+        public void empty() {
+            ss.clear();
+            notifyDataSetChanged();
+        }
 
         public void addSounds(Context ctx, Sound... sounds) {
             for(Sound s : sounds) {

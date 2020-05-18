@@ -11,5 +11,9 @@
         android:id="@+id/manage_templates"
         android:title="@string/manage_templates"
         app:showAsAction="never" />
+    <item
+        android:id="@+id/refresh"
+        android:title="@string/refresh"
+        app:showAsAction="never" />
 </menu>
 
