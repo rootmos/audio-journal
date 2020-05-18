@@ -56,7 +56,7 @@ public class UploadService extends Service {
         nm.createNotificationChannel(nc);
 
         Notification n = new Notification.Builder(this, nc.getId())
-            .setSmallIcon(R.mipmap.audio_journal)
+            .setSmallIcon(R.drawable.upload)
             .setGroup(NOTIFICATION_GROUP)
             .setGroupSummary(true)
             .setSubText("uploading...")
@@ -200,7 +200,7 @@ public class UploadService extends Service {
 
     private void notify(Sound s, int progress) {
         Notification n = new Notification.Builder(this, nc.getId())
-            .setSmallIcon(R.mipmap.audio_journal)
+            .setSmallIcon(R.drawable.upload)
             .setGroup(NOTIFICATION_GROUP)
             .setSubText("uploading...")
             .setContentTitle(s.getTitle())

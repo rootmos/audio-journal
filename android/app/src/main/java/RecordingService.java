@@ -188,7 +188,7 @@ public class RecordingService extends Service {
         nm.createNotificationChannel(nc);
 
         Notification.Builder b = new Notification.Builder(this, nc.getId())
-            .setSmallIcon(R.mipmap.audio_journal)
+            .setSmallIcon(R.drawable.start_recording)
             .setSubText("recording...")
             .setContentIntent(p)
             .setContentTitle(recordTask.getTitle())
