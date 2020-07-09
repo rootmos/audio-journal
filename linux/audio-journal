@@ -82,7 +82,7 @@ save_to_secondary() {
 }
 
 upload() {
-    s3cmd put --acl-public "$1" "s3://$BUCKET/$PREFIX"
+    aws cp --acl=public-read "$1" "s3://$BUCKET/$PREFIX"
 }
 
 url() {
@@ -182,8 +182,8 @@ playback() {
 
 list() {
     export -f url
-    s3cmd ls -l "s3://$BUCKET/$PREFIX" \
-        | awk '{ print $6 }' \
+    aws s3 ls "s3://$BUCKET/$PREFIX" \
+        | awk '{ print $4 }' \
         | grep -v ".json$" \
         | sort -r | while read -r f; do
         url "$(basename "$f")"
@@ -260,12 +260,12 @@ case "$MODE" in
 esac
 
 prepare() {
-    require s3cmd sox id3v2 rsync
+    require aws sox id3v2 rsync
     mkdir -p "$AUDIO_JOURNAL"
 }
 
 prepare_read_only() {
-    require s3cmd
+    require aws
 }
 
 case $ACTION in
