@@ -1,0 +1,3 @@
+[submodule "linux/trec/libr"]
+	path = linux/trec/libr
+	url = git@github.com:rootmos/libr.git
