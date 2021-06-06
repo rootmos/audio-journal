@@ -14,13 +14,22 @@ struct options {
     unsigned int channels;
     unsigned int rate;
 
-    float lead_in_seconds;
+    size_t buffer_seconds;
+    float fade_in_seconds;
+    float fade_out_seconds;
+    float graceperiod_seconds;
     float threshold_percent;
 };
 
+enum state_e {
+    STATE_UNINITIALIZED = 0,
+    STATE_WAITING,
+    STATE_RECORDING,
+    STATE_STOPPING,
+};
+
 struct state {
-    int running;
-    int recording;
+    enum state_e state;
 
     int sfd;
 
@@ -31,34 +40,72 @@ struct state {
     unsigned int channels;
 
     void* buf;
-    size_t f, fi, fj, fn, r;
+    size_t f, fi, fe, fj, fn, r;
 
-    size_t lead_in_frames;
+    size_t fade_in_frames;
+    size_t fade_out_frames;
+    size_t grace_frames;
     uint16_t threshold;
     uint16_t max;
+    size_t silent_frames;
 };
 
 static void monitor_init(struct state* st, const struct options* opts)
 {
-    st->lead_in_frames = opts->lead_in_seconds * opts->rate * opts->channels;
-    if(st->lead_in_frames > st->fn) {
-        failwith("buffer too small for %f seconds of lead in", opts->lead_in_seconds);
+    st->fade_in_frames = opts->fade_in_seconds * opts->rate;
+    if(st->fade_in_frames > st->fn) {
+        failwith("buffer too small for %f seconds of fade in",
+                 opts->fade_in_seconds);
     }
+
+    st->fade_out_frames = opts->fade_out_seconds * opts->rate;
+    if(st->fade_out_frames > st->fn) {
+        failwith("buffer too small for %f seconds of fade out",
+                 opts->fade_out_seconds);
+    }
+
+    st->grace_frames = opts->graceperiod_seconds * opts->rate;
+    if(st->grace_frames > st->fn) {
+        failwith("buffer too small for a %f seconds grace period",
+                 opts->graceperiod_seconds);
+    }
+
     st->threshold = opts->threshold_percent/100 * INT16_MAX;
     st->max = 0;
 }
 
 static void monitor_handle_new_frames(struct state* st,
-                                      const void* buf, snd_pcm_uframes_t n)
+                                      const void* buf,
+                                      size_t f0,
+                                      snd_pcm_uframes_t n)
 {
     const int16_t* samples = buf;
     for(size_t i = 0; i < n * st->channels; i++) {
         int16_t s = samples[i];
+
+        // max sample
         if(s >= 0 && s > st->max) {
             st->max = s;
         } else if (s < 0 && -s > st->max) {
             st->max = -s;
         }
+    }
+
+    // silent frames
+    for(size_t i = 0; i < n; i++) {
+        for(size_t j = 0; j < st->channels; j++) {
+            int16_t s = samples[i*st->channels+j];
+            if((s >= 0 && s > st->threshold)
+               || (s < 0 && -s > st->threshold)) {
+                st->silent_frames = 0;
+                st->fe = f0 + i;
+                if(st->fe == st->fn) {
+                    st->fe = 0;
+                }
+                break;
+            }
+        }
+        st->silent_frames += 1;
     }
 }
 
@@ -70,16 +117,16 @@ static int monitor_check_for_sound(struct state* st)
 
     if(st->fi <= st->fj) {
         size_t n = st->fj - st->fi;
-        if(n > st->lead_in_frames) {
-            st->fi = st->fj - st->lead_in_frames;
+        if(n > st->fade_in_frames) {
+            st->fi = st->fj - st->fade_in_frames;
         }
     } else {
         size_t n = st->fn - st->fi;
-        if(n + st->fj > st->lead_in_frames) {
-            if(st->lead_in_frames <= st->fj) {
-                st->fi = st->fj - st->lead_in_frames;
+        if(n + st->fj > st->fade_in_frames) {
+            if(st->fade_in_frames <= st->fj) {
+                st->fi = st->fj - st->fade_in_frames;
             } else {
-                st->fi += st->lead_in_frames - st->fj;
+                st->fi += st->fade_in_frames - st->fj;
             }
         }
     }
@@ -87,9 +134,24 @@ static int monitor_check_for_sound(struct state* st)
     return 0;
 }
 
+static void add_fade_out_frames(struct state* st)
+{
+    if(st->fi <= st->fj) {
+        st->fe = MIN(st->fj, st->fe + st->fade_out_frames);
+    } else {
+        size_t n = st->fn - st->fi;
+        if(n <= st->fade_out_frames) {
+            st->fe += st->fade_out_frames;
+        } else {
+            size_t m = st->fade_in_frames - n;
+            st->fe = MIN(m, st->fj);
+        }
+    }
+}
+
 static void alsa_init(struct state* st, const struct options* opts)
 {
-    st->fn = 5 /* seconds */ * opts->rate;
+    st->fn = opts->buffer_seconds * opts->rate;
     st->channels = opts->channels;
 
     int r = snd_pcm_open(&st->pcm, opts->device,
@@ -108,7 +170,7 @@ static void alsa_init(struct state* st, const struct options* opts)
     st->f = sizeof(int16_t)*st->channels;
     size_t n = st->f * st->fn;
     st->buf = malloc(n); CHECK_MALLOC(st->buf);
-    st->fi = st->fj = st->r = 0;
+    st->fi = st->fe = st->fj = st->r = 0;
 }
 
 static void alsa_deinit(struct state* st)
@@ -126,6 +188,7 @@ static void alsa_start(struct state* st)
 static void alsa_handle_read(struct state* st)
 {
     while(1) {
+        trace("fi=%zu fe=%zu fj=%zu fn=%zu r=%zu", st->fi, st->fe, st->fj, st->fn, st->r);
         snd_pcm_uframes_t n;
         void* buf = (char*)st->buf + st->f*st->fj;
         if(st->fi <= st->fj) {
@@ -143,8 +206,8 @@ static void alsa_handle_read(struct state* st)
         }
         CHECK_ALSA(s, "snd_pcm_readi");
 
-        trace("captured %ld frames (buffer %zu)", s, n);
-        monitor_handle_new_frames(st, buf, s);
+        trace("captured %ld frames (out of %zu)", s, n);
+        monitor_handle_new_frames(st, buf, st->fj, s);
 
         st->fj += s;
         if(st->fj == st->fn) {
@@ -153,9 +216,9 @@ static void alsa_handle_read(struct state* st)
     }
 }
 
-static int buffer_non_empty(struct state* st)
+static int frames_available_to_encode(struct state* st)
 {
-    return st->fi != st->fj;
+    return st->fi != st->fe;
 }
 
 static void encoder_init(struct state* st)
@@ -225,10 +288,11 @@ static void encoder_start(struct state* st,
 static void encoder_write(struct state* st)
 {
     while(1) {
+        trace("fi=%zu fe=%zu fj=%zu fn=%zu r=%zu", st->fi, st->fe, st->fj, st->fn, st->r);
         size_t n;
         void* buf = (char*)st->buf + st->f*st->fi + st->r;
-        if(st->fi <= st->fj) {
-            n = (st->fj - st->fi) * st->f - st->r;
+        if(st->fi <= st->fe) {
+            n = (st->fe - st->fi) * st->f - st->r;
         } else {
             n = (st->fn - st->fi) * st->f - st->r;
         }
@@ -300,8 +364,8 @@ static void signalfd_handle_event(struct state* st)
         }
 
         if(si.ssi_signo == SIGINT) {
-            debug("initiating graceful shutdown: SIGINT");
-            st->running = 0;
+            debug("SIGINT");
+            st->state = STATE_STOPPING;
         } else {
             warning("unhandled signal: %u", si.ssi_signo);
         }
@@ -315,7 +379,10 @@ void parse_opts(struct options* opts, int argc, char* argv[])
     opts->channels = 2;
     opts->rate = 44100;
 
-    opts->lead_in_seconds = 0.1;
+    opts->buffer_seconds = 15;
+    opts->fade_in_seconds = 0.2;
+    opts->fade_out_seconds = 0.2;
+    opts->graceperiod_seconds = 10;
     opts->threshold_percent = 1.0;
 
     if(argc < 2) {
@@ -331,9 +398,7 @@ int main(int argc, char* argv[])
     parse_opts(&opts, argc, argv);
 
     struct state st = {
-        .running = 1,
-        .recording = 0,
-        .max = 0,
+        .state = STATE_UNINITIALIZED,
     };
 
     alsa_init(&st, &opts);
@@ -343,8 +408,9 @@ int main(int argc, char* argv[])
 
     alsa_start(&st);
 
+    st.state = STATE_WAITING;
     info("waiting");
-    while(st.running) {
+    while(st.state != STATE_STOPPING) {
         const int afd = snd_pcm_poll_descriptors_count(st.pcm);
         CHECK_ALSA(afd, "snd_pcm_poll_descriptors_count");
 
@@ -353,7 +419,7 @@ int main(int argc, char* argv[])
         fds[0] = (struct pollfd) { .fd = st.sfd, .events = POLLIN };
         fds[1] = (struct pollfd) { .fd = st.enc_fd, .events = 0 };
 
-        if(st.recording && buffer_non_empty(&st)) {
+        if(st.state == STATE_RECORDING && frames_available_to_encode(&st)) {
             fds[1].events |= POLLOUT;
         }
 
@@ -373,12 +439,12 @@ int main(int argc, char* argv[])
 
         if(fds[1].revents & POLLHUP) {
             error("encoder pipe closed prematurely");
-            st.running = 0;
+            st.state = STATE_STOPPING;
         }
 
         if(fds[1].revents & POLLERR) {
             error("encoder pipe errored");
-            st.running = 0;
+            st.state = STATE_STOPPING;
         }
 
         unsigned short revents;
@@ -389,17 +455,25 @@ int main(int argc, char* argv[])
             alsa_handle_read(&st);
         }
 
-        if(!st.recording) {
+        if(st.state == STATE_WAITING) {
             if(monitor_check_for_sound(&st)) {
                 char* fn = render_filename(&opts);
                 info("recording: %s", fn);
                 encoder_start(&st, &opts, fn);
-                st.recording = 1;
+                st.state = STATE_RECORDING;
+            }
+        }
+
+        if(st.state == STATE_RECORDING) {
+            if(st.silent_frames >= st.grace_frames) {
+                info("long silence detected");
+                st.state = STATE_STOPPING;
+                add_fade_out_frames(&st);
             }
         }
     }
 
-    debug("graceful shutdown");
+    debug("stopping");
 
     encoder_deinit(&st);
     signalfd_deinit(&st);
