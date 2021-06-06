@@ -1,6 +1,7 @@
 #include <poll.h>
 #include <sys/signalfd.h>
 #include <sys/wait.h>
+#include <time.h>
 
 #include <alsa/asoundlib.h>
 
@@ -8,7 +9,7 @@
 
 struct options {
     const char* lame;
-    const char* fn;
+    const char* fn_template;
     const char* device;
     unsigned int channels;
     unsigned int rate;
@@ -163,7 +164,23 @@ static void encoder_init(struct state* st)
     st->enc_fd = -1;
 }
 
-static void encoder_start(struct state* st, const struct options* opts)
+static char* render_filename(const struct options* opts)
+{
+    size_t L = 1024;
+    char* fn = malloc(L); CHECK_MALLOC(fn);
+
+    time_t now = time(NULL);
+    size_t n = strftime(fn, L, opts->fn_template, localtime(&now));
+    if(n == 0) {
+        failwith("unable to render filename template: %s", opts->fn_template);
+    }
+
+    return fn;
+}
+
+static void encoder_start(struct state* st,
+                          const struct options* opts,
+                          char* fn)
 {
     int fds[2];
     int r = pipe(fds); CHECK(r, "pipe");
@@ -181,7 +198,6 @@ static void encoder_start(struct state* st, const struct options* opts)
     r = dup2(fds[0], 0); CHECK(r, "dup2");
 
     char* lame = strdup(opts->lame); CHECK_MALLOC(lame);
-    char* fn = strdup(opts->fn); CHECK_MALLOC(fn);
 
     char rate[16];
     ssize_t s = snprintf(LIT(rate), "%u.%u", opts->rate/1000, opts->rate%1000);
@@ -306,8 +322,7 @@ void parse_opts(struct options* opts, int argc, char* argv[])
         failwith("too few arguments");
     }
 
-    opts->fn = argv[1];
-    info("output: %s", opts->fn);
+    opts->fn_template = argv[1];
 }
 
 int main(int argc, char* argv[])
@@ -376,8 +391,9 @@ int main(int argc, char* argv[])
 
         if(!st.recording) {
             if(monitor_check_for_sound(&st)) {
-                info("recording");
-                encoder_start(&st, &opts);
+                char* fn = render_filename(&opts);
+                info("recording: %s", fn);
+                encoder_start(&st, &opts, fn);
                 st.recording = 1;
             }
         }
