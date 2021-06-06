@@ -52,8 +52,11 @@ static void monitor_handle_new_frames(struct state* st,
 {
     const int16_t* samples = buf;
     for(size_t i = 0; i < n * st->channels; i++) {
-        if(samples[i] > st->max) {
-            st->max = samples[i];
+        int16_t s = samples[i];
+        if(s >= 0 && s > st->max) {
+            st->max = s;
+        } else if (s < 0 && -s > st->max) {
+            st->max = -s;
         }
     }
 }
@@ -296,7 +299,7 @@ void parse_opts(struct options* opts, int argc, char* argv[])
     opts->channels = 2;
     opts->rate = 44100;
 
-    opts->lead_in_seconds = 0.2;
+    opts->lead_in_seconds = 0.1;
     opts->threshold_percent = 1.0;
 
     if(argc < 2) {
