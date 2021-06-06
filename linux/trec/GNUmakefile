@@ -3,7 +3,7 @@ export BUILD ?= $(shell pwd)/build
 export PREFIX ?= $(HOME)/.local
 
 run: build
-	@$(BUILD)/trec
+	@$(BUILD)/trec test.mp3
 
 install: build
 	install --strip -D -t $(PREFIX)/bin $(BUILD)/trec
