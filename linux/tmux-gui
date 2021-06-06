@@ -1,0 +1,34 @@
+#!/bin/bash
+
+set -o nounset -o pipefail -o errexit
+
+SELF=$(readlink -f "$0")
+TITLE=${TITLE-audio-journal}
+
+if [ -z "${AUDIO_JOURNAL_BOOTSTRAP-}" ]; then
+    exec env AUDIO_JOURNAL_BOOTSTRAP=1 st -t "$TITLE" -e "$SELF" "$@" 2>/dev/null
+elif [ "$AUDIO_JOURNAL_BOOTSTRAP" = "1" ]; then
+    SALT=$(tr -dc 'a-z0-9' < /dev/urandom | head -c4 || true)
+    SESSION=$TITLE-$SALT
+    tmux new-session -s "$SESSION" \
+        -e AUDIO_JOURNAL_BOOTSTRAP=2 \
+        -e HANG=${HANG-0} \
+        -n "$TITLE" \
+        "$SELF" "$@"
+    exec tmux attach-session -t "$SESSION"
+fi
+
+TMP=$(mktemp -d)
+trap 'rm -rf $TMP' EXIT
+
+export META=$TMP/meta
+mkfifo "$META"
+tmux split-pane -v cat "$META"
+tmux last-pane
+
+set +o errexit
+"$@"
+EC=$?
+if [ "$EC" != 0 ]; then
+    sleep "${HANG-0}"
+fi
