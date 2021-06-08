@@ -2,28 +2,35 @@
 
 import argparse
 import boto3
+import eyed3
+import hashlib
 import itertools
 import json
 import logging
+import mimetypes
 import pathlib
-import hashlib
 import re
+import subprocess
+import tempfile
+import urllib
 
+from base64 import b64encode
 from datetime import date, time, datetime
 
-s3 = boto3.resource('s3')
+s3 = boto3.resource("s3")
+s3_client = boto3.client("s3")
 
 logger = None
 def setup_logger(level):
-    l = logging.getLogger('audio-journal')
+    l = logging.getLogger("audio-journal")
     l.setLevel(level)
 
     ch = logging.StreamHandler()
     ch.setLevel(level)
 
     f = logging.Formatter(
-        fmt='%(asctime)s:%(name)s:%(levelname)s %(message)s',
-        datefmt='%Y-%m-%dT%H:%M:%S%z')
+        fmt="%(asctime)s:%(name)s:%(levelname)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z")
     ch.setFormatter(f)
 
     l.addHandler(ch)
@@ -47,6 +54,7 @@ def parse_args():
     list_cmd.add_argument("prefix", metavar="PREFIX", nargs="*")
 
     record = subparsers.add_parser("record", help="record track")
+    record.add_argument("--prefix", help="prefix")
 
     return parser.parse_args()
 
@@ -128,7 +136,7 @@ def lenient_datetime_parse(s):
         return datetime.fromisoformat(t)
 
 class Sound:
-    def __init__(self, title, artist, composer, length, url, sha1, datetime):
+    def __init__(self, title, artist, composer, length, url, sha1, datetime, filename, mimetype):
         self.title = title
         self.artist = artist
         self.composer = composer
@@ -136,6 +144,8 @@ class Sound:
         self.url = url
         self.sha1 = sha1
         self.datetime = datetime
+        self.filename = filename
+        self.mimetype = mimetype
 
     def from_json(j):
         return Sound(
@@ -145,7 +155,22 @@ class Sound:
                 length = j["length"],
                 url = j["url"],
                 sha1 = j["sha1"],
+                filename = j["filename"],
+                mimetype = j.get("mimetype"),
                 datetime = lenient_datetime_parse(j["date"]))
+
+    def to_json(self):
+        return {
+            "title": self.title,
+            "artist": self.artist,
+            "composer": self.composer,
+            "length": self.length,
+            "url": self.url,
+            "sha1": self.sha1,
+            "filename": self.filename,
+            "mimetype": self.mimetype,
+            "date": self.datetime.isoformat()
+        }
 
 def load_sounds(args):
     b = s3.Bucket(args.bucket)
@@ -172,8 +197,92 @@ def list_cmd(args):
     for s in sorted(ss, key=lambda s: s.datetime):
         print(s.url)
 
+def compute_sha1_md5(fn):
+    with open(fn, mode="rb") as f:
+        sha1 = hashlib.sha1()
+        md5 = hashlib.md5()
+        while True:
+            bs = f.read(4096)
+            if len(bs) == 0: break
+            sha1.update(bs)
+            md5.update(bs)
+        return (sha1.digest(), md5.digest())
+
 def record_cmd(args):
-    raise NotImplementedError
+    fn_template = "%Y-%m-%dT%H:%M:%S%z.mp3"
+    title_template = "Session @ %Y-%m-%dT%H:%M:%S%z"
+    artist = "rootmos"
+    composer = "Gustav Behm"
+
+    def postprocess(wd):
+        b = s3.Bucket(args.bucket)
+        bl = s3_client.get_bucket_location(Bucket=b.name)["LocationConstraint"]
+        p = pathlib.Path(wd.name)
+        for fn in p.iterdir():
+            d = datetime.strptime(fn.name, fn_template)
+            af = eyed3.load(fn)
+            af.tag = eyed3.id3.Tag()
+            af.tag.artist = artist
+            af.tag.title = d.strftime(title_template)
+            af.tag.composer = composer
+            af.tag.recording_date = d.date().isoformat()
+            af.tag.save()
+            duration = af.info.time_secs
+            mimetype, _ = mimetypes.guess_type(fn)
+            sha1, md5 = compute_sha1_md5(fn)
+
+            if args.prefix is not None:
+                key = f"{args.prefix}/{fn.name}"
+            else:
+                key = fn.name
+
+            with open(fn, mode="rb") as f:
+                b.put_object(
+                        Key = key,
+                        ACL = "public-read",
+                        Body = f,
+                        ContentType = mimetype,
+                        ContentMD5 = str(b64encode(md5), "UTF-8"))
+
+            url = "https://%s.s3.%s.amazonaws.com/%s" % (
+                    b.name,
+                    bl,
+                    urllib.parse.quote(key, safe="~()*!.'/"))
+
+            s = Sound(
+                    title = af.tag.title,
+                    artist = af.tag.artist,
+                    composer = af.tag.composer,
+                    length = duration,
+                    url = url,
+                    sha1 = sha1.hex(),
+                    datetime = d,
+                    filename = fn.name,
+                    mimetype = mimetype)
+
+            if args.prefix is not None:
+                key = f"{args.prefix}/{fn.stem}.json"
+            else:
+                key = f"{fn.stem}.json"
+
+            m = bytes(json.dumps(s.to_json()), "UTF-8")
+            md5 = hashlib.md5()
+            md5.update(m)
+            md5 = md5.digest()
+            b.put_object(
+                        Key = key,
+                        ACL = "public-read",
+                        Body = m,
+                        ContentType = "application/json",
+                        ContentMD5 = str(b64encode(md5), "UTF-8"))
+
+            logger.debug(f"processed: filename={fn.name} date={d} sha1={sha1.hex()} md5={md5.hex()} length={duration} mimetype={mimetype} url={url}")
+
+    while True:
+        wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
+        logger.debug(f"workdir: {wd.name}")
+        subprocess.run(["trec", f"{wd.name}/{fn_template}"], check=True)
+        postprocess(wd)
 
 if __name__ == "__main__":
     args = parse_args()
