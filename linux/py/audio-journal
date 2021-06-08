@@ -7,8 +7,9 @@ import json
 import logging
 import pathlib
 import hashlib
+import re
 
-from datetime import datetime
+from datetime import date, time, datetime
 
 s3 = boto3.resource('s3')
 
@@ -113,25 +114,40 @@ cache = None
 def setup_cache(args):
     return Cache(path=args.cache)
 
+def lenient_datetime_parse(s):
+    try:
+        d = date.fromisoformat(s)
+        tz = datetime.now().astimezone().tzinfo
+        return datetime.combine(d, time(0, 0, 0), tz)
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        t = re.sub(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}).\d*([+-]\d{2}:\d{2})", r"\1\2", s)
+        return datetime.fromisoformat(t)
+
 class Sound:
-    def __init__(self, title, artist, composer, url, date):
+    def __init__(self, title, artist, composer, length, url, sha1, datetime):
         self.title = title
         self.artist = artist
         self.composer = composer
+        self.length = length
         self.url = url
-        self.date = date
+        self.sha1 = sha1
+        self.datetime = datetime
 
     def from_json(j):
-        date = None # TODO: lenient parsing datetime.fromisoformat(j["date"])
-        logger.debug(j)
         return Sound(
                 title = j["title"],
                 artist = j["artist"],
                 composer = j["composer"],
+                length = j["length"],
                 url = j["url"],
-                date = date)
+                sha1 = j["sha1"],
+                datetime = lenient_datetime_parse(j["date"]))
 
-def list_cmd(args):
+def load_sounds(args):
     b = s3.Bucket(args.bucket)
 
     if len(args.prefix) == 0:
@@ -139,14 +155,22 @@ def list_cmd(args):
     else:
         i = itertools.chain(*[b.objects.filter(Prefix=p) for p in args.prefix])
 
-    ss = []
+    ss = set()
     for o in i:
         if not o.key.endswith(".json"):
             continue
 
         j = cache(b.name, o.key, o.e_tag).json(lambda: json.loads(o.get()["Body"].read()))
         s = Sound.from_json(j)
-        ss.append(s)
+        ss.add(s)
+
+    return ss
+
+def list_cmd(args):
+    ss = load_sounds(args)
+
+    for s in sorted(ss, key=lambda s: s.datetime):
+        print(s.url)
 
 def record_cmd(args):
     raise NotImplementedError
