@@ -115,6 +115,7 @@ struct state {
     usample_t global_peak;
     size_t silent_frames;
 
+    int mfd;
     int tfd;
     struct timespec monitor_period;
     sample_t* mbuf;
@@ -132,6 +133,11 @@ static void timespec_from_ms(struct timespec* ts, unsigned int ms)
 
 static void monitor_init(struct state* st, const struct options* opts)
 {
+    st->mfd = opts->monitor_fd;
+    if(st->mfd >= 0) {
+        set_blocking(st->mfd, 0);
+    }
+
     st->fade_in_frames = opts->fade_in_seconds * opts->rate;
     if(st->fade_in_frames > st->fn) {
         failwith("buffer too small for %f seconds of fade in",
@@ -214,9 +220,25 @@ static void monitor_tick(struct state* st)
         warning("missed monitor tick");
     }
 
-    float rms = 100*sqrtf((float)st->sqs/(st->rms_frames*st->channels))/SAMPLE_MAX;
-    float peak = 100.0*st->peak/SAMPLE_MAX;
-    debug("RMS%%=%.2f peak%%=%.2f", rms, peak);
+    usample_t rms = round(sqrtf((float)st->sqs/(st->rms_frames*st->channels)));
+    trace("RMS%%=%.2f peak%%=%.2f",
+          100.0*rms/SAMPLE_MAX, 100.0*st->peak/SAMPLE_MAX);
+
+    if(st->mfd >= 0) {
+        char buf[1+sizeof(usample_t)+sizeof(usample_t)];
+        buf[0] = st->state;
+        memcpy(&buf[1], &rms, sizeof(rms));
+        memcpy(&buf[1+sizeof(rms)], &st->peak, sizeof(st->peak));
+        ssize_t s = send(st->mfd, buf, sizeof(buf), 0);
+        if(s == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            warning("dropped monitoring message");
+        } else {
+            CHECK(s, "send");
+            if(s != sizeof(buf)) {
+                failwith("unexpected partial write");
+            }
+        }
+    }
 }
 
 static void monitor_handle_new_frames(struct state* st,
@@ -584,12 +606,6 @@ int main(int argc, char* argv[])
 {
     struct options opts;
     parse_opts(&opts, argc, argv);
-
-    if(opts.monitor_fd >= 0) {
-        set_blocking(opts.monitor_fd, 0);
-        ssize_t s = send(opts.monitor_fd, LIT("hello unix world"), 0);
-        CHECK(s, "send");
-    }
 
     struct state st = {
         .state = STATE_UNINITIALIZED,

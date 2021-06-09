@@ -16,6 +16,7 @@ import tempfile
 import urllib
 import os
 import socket
+import sys
 
 from base64 import b64encode
 from datetime import date, time, datetime
@@ -286,17 +287,17 @@ def record_cmd(args):
             self.transport = transport
 
         def datagram_received(self, data, addr):
-            msg = data.decode()
-            logger.debug(f"received {msg}")
+            state = data[0]
+            rms = int.from_bytes(data[1:2], byteorder=sys.byteorder)
+            peak = int.from_bytes(data[3:5], byteorder=sys.byteorder)
+            logger.debug(f"received monitoring data: state={state} rms={rms} peak={peak}")
 
     async def record(wd):
         r, w = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
         w.set_inheritable(True)
 
         loop = asyncio.get_running_loop()
-        transport, protocol = await loop.create_datagram_endpoint(
-                lambda: Server(),
-                sock = r)
+        transport, protocol = await loop.create_datagram_endpoint(lambda: Server(), sock=r)
 
         trec = os.environ.get("TREC", default="trec")
         p = await asyncio.create_subprocess_exec(trec, "-M", str(w.fileno()), f"{wd.name}/{fn_template}", close_fds=False)
