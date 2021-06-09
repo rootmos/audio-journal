@@ -35,6 +35,7 @@ static void print_usage(int fd, const char* prog)
     dprintf(fd, "usage: %s [OPTION]... FILENAME_TEMPLATE\n", prog);
     dprintf(fd, "\n");
     dprintf(fd, "options:\n");
+    dprintf(fd, "  -m MS  send and log audio measurements every MS milliseconds\n");
     dprintf(fd, "  -M FD  send audio measurements and metadata to FD\n");
 }
 
@@ -58,8 +59,15 @@ void parse_opts(struct options* opts, int argc, char* argv[])
     opts->monitor_fd = -1;
 
     int res;
-    while((res = getopt(argc, argv, "M:h")) != -1) {
+    while((res = getopt(argc, argv, "m:M:h")) != -1) {
         switch(res) {
+        case 'm':
+            res = sscanf(optarg, "%d", &opts->monitor_period_ms);
+            if(res != 1) {
+                dprintf(2, "unable to parse monitor period as milliseconds: %s\n", optarg);
+                exit(1);
+            }
+            break;
         case 'M':
             res = sscanf(optarg, "%d", &opts->monitor_fd);
             if(res != 1) {
@@ -87,6 +95,7 @@ enum state_e {
     STATE_UNINITIALIZED = 0,
     STATE_WAITING,
     STATE_RECORDING,
+    STATE_RECORDING_SILENCE,
     STATE_STOPPING,
 };
 
@@ -258,11 +267,12 @@ static void monitor_handle_new_frames(struct state* st,
 
     // silent frames
     for(size_t i = 0; i < n; i++) {
+        int silent = 1;
         for(size_t j = 0; j < st->channels; j++) {
             sample_t s = samples[i*st->channels+j];
             if((s >= 0 && s > st->threshold)
                || (s < 0 && -s > st->threshold)) {
-                st->silent_frames = 0;
+                silent = st->silent_frames = 0;
                 st->fe = f0 + i;
                 if(st->fe == st->fn) {
                     st->fe = 0;
@@ -270,7 +280,9 @@ static void monitor_handle_new_frames(struct state* st,
                 break;
             }
         }
-        st->silent_frames += 1;
+        if(silent) {
+            st->silent_frames += 1;
+        }
     }
 
     // monitor buffer and measurements
@@ -681,7 +693,16 @@ int main(int argc, char* argv[])
         }
 
         if(st.state == STATE_RECORDING) {
-            if(st.silent_frames >= st.grace_frames) {
+            if(st.silent_frames > 0) {
+                st.state = STATE_RECORDING_SILENCE;
+                debug("silence detected");
+            }
+        }
+
+        if(st.state == STATE_RECORDING_SILENCE) {
+            if(st.silent_frames == 0) {
+                st.state = STATE_RECORDING;
+            } else if(st.silent_frames >= st.grace_frames) {
                 info("long silence detected");
                 st.state = STATE_STOPPING;
                 add_fade_out_frames(&st);

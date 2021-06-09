@@ -18,6 +18,7 @@ import os
 import socket
 import sys
 
+from enum import Enum
 from base64 import b64encode
 from datetime import date, time, datetime
 
@@ -282,12 +283,18 @@ def record_cmd(args):
 
             logger.debug(f"processed: filename={fn.name} date={d} sha1={sha1.hex()} md5={md5.hex()} length={duration} mimetype={mimetype} url={url}")
 
+    class StateE(Enum):
+        WAITING = 1
+        RECORDING = 2
+        SILENCE = 3
+        STOPPING = 4
+
     class Server:
         def connection_made(self, transport):
             self.transport = transport
 
         def datagram_received(self, data, addr):
-            state = data[0]
+            state = StateE(data[0])
             rms = int.from_bytes(data[1:2], byteorder=sys.byteorder)
             peak = int.from_bytes(data[3:5], byteorder=sys.byteorder)
             logger.debug(f"received monitoring data: state={state} rms={rms} peak={peak}")
@@ -300,7 +307,12 @@ def record_cmd(args):
         transport, protocol = await loop.create_datagram_endpoint(lambda: Server(), sock=r)
 
         trec = os.environ.get("TREC", default="trec")
-        p = await asyncio.create_subprocess_exec(trec, "-M", str(w.fileno()), f"{wd.name}/{fn_template}", close_fds=False)
+        p = await asyncio.create_subprocess_exec(
+                trec,
+                "-M", str(w.fileno()),
+                "-m", str(10),
+                f"{wd.name}/{fn_template}",
+                close_fds=False)
         w.close()
         ec = await p.wait()
         if ec != 0:
