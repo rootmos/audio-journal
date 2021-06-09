@@ -3,7 +3,7 @@ LOG_LEVEL ?= INFO
 
 CFLAGS ?= -O1 -Wall -Werror
 CFLAGS += -DLOG_LEVEL=LOG_$(LOG_LEVEL)
-LDFLAGS = -lr -lasound
+LDFLAGS = -lm -lr -lasound
 
 CFLAGS += -I$(BUILD)/usr/include
 LDFLAGS += -L$(BUILD)/usr/lib

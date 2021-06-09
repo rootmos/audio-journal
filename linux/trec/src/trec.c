@@ -3,6 +3,7 @@
 #include <sys/wait.h>
 #include <sys/timerfd.h>
 #include <time.h>
+#include <math.h>
 
 #include <alsa/asoundlib.h>
 
@@ -35,6 +36,7 @@ enum state_e {
 
 typedef int16_t sample_t;
 typedef uint16_t usample_t;
+#define SAMPLE_MAX INT16_MAX
 
 struct state {
     enum state_e state;
@@ -54,15 +56,15 @@ struct state {
     size_t fade_out_frames;
     size_t grace_frames;
     usample_t threshold;
-    usample_t max; /* global max */
+    usample_t global_peak;
     size_t silent_frames;
 
     int tfd;
     struct timespec monitor_period;
-    void* mbuf;
+    sample_t* mbuf;
     size_t mi, mn;
     usample_t peak; size_t peak_frames;
-    usample_t sqs; size_t rms_frames;
+    uint64_t sqs; size_t rms_frames;
 };
 
 static void timespec_from_ms(struct timespec* ts, unsigned int ms)
@@ -92,8 +94,8 @@ static void monitor_init(struct state* st, const struct options* opts)
                  opts->graceperiod_seconds);
     }
 
-    st->threshold = opts->threshold_percent/100 * INT16_MAX;
-    st->max = 0;
+    st->threshold = opts->threshold_percent/100 * SAMPLE_MAX;
+    st->global_peak = 0;
 
     st->tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
     CHECK(st->tfd, "timerfd_create");
@@ -115,6 +117,8 @@ static void monitor_init(struct state* st, const struct options* opts)
     st->mn = MAX(st->peak_frames, st->rms_frames);
     st->mi = 0;
     st->mbuf = calloc(st->mn, st->f); CHECK_MALLOC(st->mbuf);
+    st->peak = 0;
+    st->sqs = 0;
 }
 
 static void monitor_start(struct state* st)
@@ -154,23 +158,23 @@ static void monitor_tick(struct state* st)
         warning("missed monitor tick");
     }
 
-    debug("tick");
+    float rms = 100*sqrtf((float)st->sqs/(st->rms_frames*st->channels))/SAMPLE_MAX;
+    float peak = 100.0*st->peak/SAMPLE_MAX;
+    debug("tick: RMS%%=%.2f peak%%=%.2f", rms, peak);
 }
 
 static void monitor_handle_new_frames(struct state* st,
-                                      const void* buf,
+                                      const sample_t* samples,
                                       size_t f0,
                                       snd_pcm_uframes_t n)
 {
-    const sample_t* samples = buf;
     for(size_t i = 0; i < n * st->channels; i++) {
         sample_t s = samples[i];
 
-        // max sample
-        if(s >= 0 && s > st->max) {
-            st->max = s;
-        } else if (s < 0 && -s > st->max) {
-            st->max = -s;
+        // global peak sample
+        usample_t abs = s >= 0 ? s : -s;
+        if(abs > st->global_peak) {
+            st->global_peak = abs;
         }
     }
 
@@ -191,11 +195,61 @@ static void monitor_handle_new_frames(struct state* st,
         st->silent_frames += 1;
     }
 
-    // monitor buffer
-    sample_t* m = (sample_t*)st->mbuf + st->mi;
+    // monitor buffer and measurements
+    sample_t* m = st->mbuf + st->mi*st->channels;
     for(size_t i = 0; i < n; i++) {
         for(size_t j = 0; j < st->channels; j++) {
-            *m = samples[i*st->channels+j];
+            sample_t s = samples[i*st->channels+j];
+
+            // squares
+            {
+                st->sqs += (uint64_t)s*s;
+                uint64_t t;
+                if(st->rms_frames <= st->mi) {
+                    t = st->mbuf[(st->mi-st->rms_frames)*st->channels + j];
+                } else {
+                    t = st->mbuf[(st->mn-(st->rms_frames-st->mi))*st->channels + j];
+                }
+                st->sqs -= t*t;
+            }
+
+            // running peak (TODO: divide and conquer aggregates)
+            {
+                usample_t abs = s >= 0 ? s : -s;
+                if(abs > st->peak) {
+                    st->peak = abs;
+                } else {
+                    size_t k;
+                    if(st->peak_frames <= st->mi) {
+                        k = (st->mi-st->peak_frames)*st->channels + j;
+                    } else {
+                        k = (st->mn-(st->peak_frames-st->mi))*st->channels + j;
+                    }
+                    sample_t t = st->mbuf[k];
+                    abs = t >= 0 ? t : -t;
+                    if(abs == st->peak && st->peak > 0) {
+                        usample_t peak = 0;
+                        size_t l = st->mi*st->channels + j;
+                        while(1) {
+                            k += 1;
+                            if(k == st->mn*st->channels) {
+                                k = 0;
+                            }
+                            if(k == l) {
+                                break;
+                            }
+                            t = st->mbuf[k];
+                            abs = t >= 0 ? t : -t;
+                            if(abs > peak) {
+                                peak = abs;
+                            }
+                        }
+                        st->peak = peak;
+                    }
+                }
+            }
+
+            *m = s;
             m += 1;
         }
         st->mi += 1;
@@ -208,7 +262,7 @@ static void monitor_handle_new_frames(struct state* st,
 
 static int monitor_check_for_sound(struct state* st)
 {
-    if(st->max > st->threshold) {
+    if(st->global_peak > st->threshold) {
         return 1;
     }
 
@@ -477,15 +531,15 @@ void parse_opts(struct options* opts, int argc, char* argv[])
     opts->channels = 2;
     opts->rate = 44100;
 
-    opts->buffer_seconds = 15;
+    opts->buffer_seconds = 10.0;
     opts->fade_in_seconds = 0.2;
     opts->fade_out_seconds = 0.2;
     opts->graceperiod_seconds = 2;
     opts->threshold_percent = 1.0;
 
-    opts->monitor_period_ms = 1500;
-    opts->peak_seconds = 5;
-    opts->rms_seconds = 0.01;
+    opts->monitor_period_ms = 100;
+    opts->peak_seconds = 3.0;
+    opts->rms_seconds = 0.1;
 
     if(argc < 2) {
         failwith("too few arguments");
