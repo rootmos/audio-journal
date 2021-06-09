@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import asyncio
 import argparse
 import boto3
 import eyed3
@@ -14,6 +15,7 @@ import subprocess
 import tempfile
 import urllib
 import os
+import socket
 
 from base64 import b64encode
 from datetime import date, time, datetime
@@ -279,12 +281,39 @@ def record_cmd(args):
 
             logger.debug(f"processed: filename={fn.name} date={d} sha1={sha1.hex()} md5={md5.hex()} length={duration} mimetype={mimetype} url={url}")
 
-    while True:
-        wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
-        logger.debug(f"workdir: {wd.name}")
+    class Server:
+        def connection_made(self, transport):
+            self.transport = transport
+
+        def datagram_received(self, data, addr):
+            msg = data.decode()
+            logger.debug(f"received {msg}")
+
+    async def record(wd):
+        r, w = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+        w.set_inheritable(True)
+
+        loop = asyncio.get_running_loop()
+        transport, protocol = await loop.create_datagram_endpoint(
+                lambda: Server(),
+                sock = r)
+
         trec = os.environ.get("TREC", default="trec")
-        subprocess.run([trec, f"{wd.name}/{fn_template}"], check=True)
-        postprocess(wd)
+        p = await asyncio.create_subprocess_exec(trec, "-M", str(w.fileno()), f"{wd.name}/{fn_template}", close_fds=False)
+        w.close()
+        ec = await p.wait()
+        if ec != 0:
+            raise RuntimeError(f"trac terminated with non-zero exit code: {ec}")
+
+    async def loop():
+        while True:
+            wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
+            logger.debug(f"workdir: {wd.name}")
+            await record(wd)
+            # postprocess(wd)
+            break
+
+    asyncio.run(loop())
 
 if __name__ == "__main__":
     args = parse_args()

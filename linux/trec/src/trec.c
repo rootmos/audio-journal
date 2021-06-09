@@ -2,6 +2,7 @@
 #include <sys/signalfd.h>
 #include <sys/wait.h>
 #include <sys/timerfd.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <math.h>
 
@@ -25,7 +26,62 @@ struct options {
     unsigned int monitor_period_ms;
     float peak_seconds;
     float rms_seconds;
+
+    int monitor_fd;
 };
+
+static void print_usage(int fd, const char* prog)
+{
+    dprintf(fd, "usage: %s [OPTION]... FILENAME_TEMPLATE\n", prog);
+    dprintf(fd, "\n");
+    dprintf(fd, "options:\n");
+    dprintf(fd, "  -M FD  send audio measurements and metadata to FD\n");
+}
+
+void parse_opts(struct options* opts, int argc, char* argv[])
+{
+    opts->lame = "lame";
+    opts->device = "default";
+    opts->channels = 2;
+    opts->rate = 44100;
+
+    opts->buffer_seconds = 10.0;
+    opts->fade_in_seconds = 0.2;
+    opts->fade_out_seconds = 0.2;
+    opts->graceperiod_seconds = 2;
+    opts->threshold_percent = 1.0;
+
+    opts->monitor_period_ms = 100;
+    opts->peak_seconds = 3.0;
+    opts->rms_seconds = 0.1;
+
+    opts->monitor_fd = -1;
+
+    int res;
+    while((res = getopt(argc, argv, "M:h")) != -1) {
+        switch(res) {
+        case 'M':
+            res = sscanf(optarg, "%d", &opts->monitor_fd);
+            if(res != 1) {
+                dprintf(2, "unable to parse monitor fd: %s\n", optarg);
+                exit(1);
+            }
+            break;
+        case 'h':
+        default:
+            print_usage(res == 'h' ? 1 : 2, argv[0]);
+            exit(res == 'h' ? 0 : 1);
+        }
+    }
+
+    if(optind != argc - 1) {
+        print_usage(2, argv[0]);
+        exit(1);
+    }
+
+    opts->fn_template = argv[optind];
+}
+
 
 enum state_e {
     STATE_UNINITIALIZED = 0,
@@ -160,7 +216,7 @@ static void monitor_tick(struct state* st)
 
     float rms = 100*sqrtf((float)st->sqs/(st->rms_frames*st->channels))/SAMPLE_MAX;
     float peak = 100.0*st->peak/SAMPLE_MAX;
-    debug("tick: RMS%%=%.2f peak%%=%.2f", rms, peak);
+    debug("RMS%%=%.2f peak%%=%.2f", rms, peak);
 }
 
 static void monitor_handle_new_frames(struct state* st,
@@ -524,34 +580,16 @@ static void signalfd_handle_event(struct state* st)
     }
 }
 
-void parse_opts(struct options* opts, int argc, char* argv[])
-{
-    opts->lame = "lame";
-    opts->device = "default";
-    opts->channels = 2;
-    opts->rate = 44100;
-
-    opts->buffer_seconds = 10.0;
-    opts->fade_in_seconds = 0.2;
-    opts->fade_out_seconds = 0.2;
-    opts->graceperiod_seconds = 2;
-    opts->threshold_percent = 1.0;
-
-    opts->monitor_period_ms = 100;
-    opts->peak_seconds = 3.0;
-    opts->rms_seconds = 0.1;
-
-    if(argc < 2) {
-        failwith("too few arguments");
-    }
-
-    opts->fn_template = argv[1];
-}
-
 int main(int argc, char* argv[])
 {
     struct options opts;
     parse_opts(&opts, argc, argv);
+
+    if(opts.monitor_fd >= 0) {
+        set_blocking(opts.monitor_fd, 0);
+        ssize_t s = send(opts.monitor_fd, LIT("hello unix world"), 0);
+        CHECK(s, "send");
+    }
 
     struct state st = {
         .state = STATE_UNINITIALIZED,
