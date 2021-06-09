@@ -1,6 +1,7 @@
 #include <poll.h>
 #include <sys/signalfd.h>
 #include <sys/wait.h>
+#include <sys/timerfd.h>
 #include <time.h>
 
 #include <alsa/asoundlib.h>
@@ -19,6 +20,10 @@ struct options {
     float fade_out_seconds;
     float graceperiod_seconds;
     float threshold_percent;
+
+    unsigned int monitor_period_ms;
+    float peak_seconds;
+    float rms_seconds;
 };
 
 enum state_e {
@@ -27,6 +32,9 @@ enum state_e {
     STATE_RECORDING,
     STATE_STOPPING,
 };
+
+typedef int16_t sample_t;
+typedef uint16_t usample_t;
 
 struct state {
     enum state_e state;
@@ -45,10 +53,24 @@ struct state {
     size_t fade_in_frames;
     size_t fade_out_frames;
     size_t grace_frames;
-    uint16_t threshold;
-    uint16_t max;
+    usample_t threshold;
+    usample_t max; /* global max */
     size_t silent_frames;
+
+    int tfd;
+    struct timespec monitor_period;
+    void* mbuf;
+    size_t mi, mn;
+    usample_t peak; size_t peak_frames;
+    usample_t sqs; size_t rms_frames;
 };
+
+static void timespec_from_ms(struct timespec* ts, unsigned int ms)
+{
+    unsigned int s = ts->tv_sec = ms / 1000;
+    ms -= s * 1000;
+    ts->tv_nsec = ms * 1000000;
+}
 
 static void monitor_init(struct state* st, const struct options* opts)
 {
@@ -72,6 +94,67 @@ static void monitor_init(struct state* st, const struct options* opts)
 
     st->threshold = opts->threshold_percent/100 * INT16_MAX;
     st->max = 0;
+
+    st->tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    CHECK(st->tfd, "timerfd_create");
+
+    timespec_from_ms(&st->monitor_period, opts->monitor_period_ms);
+
+    st->peak_frames = opts->peak_seconds * opts->rate;
+    if(st->peak_frames > st->fn) {
+        failwith("buffer too small for %f seconds of peak measurement",
+                 opts->peak_seconds);
+    }
+
+    st->rms_frames = opts->rms_seconds * opts->rate;
+    if(st->rms_frames > st->fn) {
+        failwith("buffer too small for %f seconds of RMS measurement",
+                 opts->rms_seconds);
+    }
+
+    st->mn = MAX(st->peak_frames, st->rms_frames);
+    st->mi = 0;
+    st->mbuf = calloc(st->mn, st->f); CHECK_MALLOC(st->mbuf);
+}
+
+static void monitor_start(struct state* st)
+{
+    struct itimerspec its = {
+        .it_interval = st->monitor_period,
+        .it_value = st->monitor_period,
+    };
+    int r = timerfd_settime(st->tfd, 0, &its, NULL);
+    CHECK(r, "timerfd_settime");
+}
+
+static void monitor_deinit(struct state* st)
+{
+    int r = close(st->tfd); CHECK(r, "close");
+}
+
+static void monitor_tick(struct state* st)
+{
+    size_t ticks = 0;
+    while(1) {
+        uint64_t t = 0;
+        ssize_t r = read(st->tfd, &t, sizeof(t));
+        if(r == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            break;
+        }
+        CHECK(r, "read");
+        if(r != sizeof(t)) {
+            failwith("unexpected partial read");
+        }
+        ticks += t;
+    }
+    if(ticks == 0) {
+        return;
+    }
+    if(ticks > 1) {
+        warning("missed monitor tick");
+    }
+
+    debug("tick");
 }
 
 static void monitor_handle_new_frames(struct state* st,
@@ -79,9 +162,9 @@ static void monitor_handle_new_frames(struct state* st,
                                       size_t f0,
                                       snd_pcm_uframes_t n)
 {
-    const int16_t* samples = buf;
+    const sample_t* samples = buf;
     for(size_t i = 0; i < n * st->channels; i++) {
-        int16_t s = samples[i];
+        sample_t s = samples[i];
 
         // max sample
         if(s >= 0 && s > st->max) {
@@ -94,7 +177,7 @@ static void monitor_handle_new_frames(struct state* st,
     // silent frames
     for(size_t i = 0; i < n; i++) {
         for(size_t j = 0; j < st->channels; j++) {
-            int16_t s = samples[i*st->channels+j];
+            sample_t s = samples[i*st->channels+j];
             if((s >= 0 && s > st->threshold)
                || (s < 0 && -s > st->threshold)) {
                 st->silent_frames = 0;
@@ -106,6 +189,20 @@ static void monitor_handle_new_frames(struct state* st,
             }
         }
         st->silent_frames += 1;
+    }
+
+    // monitor buffer
+    sample_t* m = (sample_t*)st->mbuf + st->mi;
+    for(size_t i = 0; i < n; i++) {
+        for(size_t j = 0; j < st->channels; j++) {
+            *m = samples[i*st->channels+j];
+            m += 1;
+        }
+        st->mi += 1;
+        if(st->mi == st->mn) {
+            st->mi = 0;
+            m = st->mbuf;
+        }
     }
 }
 
@@ -167,7 +264,7 @@ static void alsa_init(struct state* st, const struct options* opts)
                            0); /* required latency */
     CHECK_ALSA(r, "snd_pcm_set_params");
 
-    st->f = sizeof(int16_t)*st->channels;
+    st->f = sizeof(sample_t)*st->channels;
     size_t n = st->f * st->fn;
     st->buf = malloc(n); CHECK_MALLOC(st->buf);
     st->fi = st->fe = st->fj = st->r = 0;
@@ -327,6 +424,7 @@ static void encoder_deinit(struct state* st)
 
     if(st->enc_pid >= 0) {
         pid_t p = waitpid(st->enc_pid, NULL, 0); CHECK(p, "waitpid");
+        // TODO: check state
     }
 }
 
@@ -382,8 +480,12 @@ void parse_opts(struct options* opts, int argc, char* argv[])
     opts->buffer_seconds = 15;
     opts->fade_in_seconds = 0.2;
     opts->fade_out_seconds = 0.2;
-    opts->graceperiod_seconds = 10;
+    opts->graceperiod_seconds = 2;
     opts->threshold_percent = 1.0;
+
+    opts->monitor_period_ms = 1500;
+    opts->peak_seconds = 5;
+    opts->rms_seconds = 0.01;
 
     if(argc < 2) {
         failwith("too few arguments");
@@ -407,6 +509,7 @@ int main(int argc, char* argv[])
     encoder_init(&st);
 
     alsa_start(&st);
+    monitor_start(&st);
 
     st.state = STATE_WAITING;
     info("waiting");
@@ -414,10 +517,11 @@ int main(int argc, char* argv[])
         const int afd = snd_pcm_poll_descriptors_count(st.pcm);
         CHECK_ALSA(afd, "snd_pcm_poll_descriptors_count");
 
-        size_t nfds = 2;
+        size_t nfds = 3;
         struct pollfd fds[nfds+afd];
         fds[0] = (struct pollfd) { .fd = st.sfd, .events = POLLIN };
         fds[1] = (struct pollfd) { .fd = st.enc_fd, .events = 0 };
+        fds[2] = (struct pollfd) { .fd = st.tfd, .events = POLLIN };
 
         if(st.state == STATE_RECORDING && frames_available_to_encode(&st)) {
             fds[1].events |= POLLOUT;
@@ -445,6 +549,10 @@ int main(int argc, char* argv[])
         if(fds[1].revents & POLLERR) {
             error("encoder pipe errored");
             st.state = STATE_STOPPING;
+        }
+
+        if(fds[2].revents & POLLIN) {
+            monitor_tick(&st);
         }
 
         unsigned short revents;
@@ -476,6 +584,7 @@ int main(int argc, char* argv[])
     debug("stopping");
 
     encoder_deinit(&st);
+    monitor_deinit(&st);
     signalfd_deinit(&st);
     alsa_deinit(&st);
 

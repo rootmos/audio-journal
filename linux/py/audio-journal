@@ -13,6 +13,7 @@ import re
 import subprocess
 import tempfile
 import urllib
+import os
 
 from base64 import b64encode
 from datetime import date, time, datetime
@@ -281,7 +282,8 @@ def record_cmd(args):
     while True:
         wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
         logger.debug(f"workdir: {wd.name}")
-        subprocess.run(["trec", f"{wd.name}/{fn_template}"], check=True)
+        trec = os.environ.get("TREC", default="trec")
+        subprocess.run([trec, f"{wd.name}/{fn_template}"], check=True)
         postprocess(wd)
 
 if __name__ == "__main__":
