@@ -51,7 +51,7 @@ def parse_args():
     home = pathlib.Path.home()
     default_cache = home / ".cache" / "audio-journal"
 
-    parser.add_argument("--log", default="WARN", help="set log level")
+    parser.add_argument("--log", default="INFO", help="set log level")
     parser.add_argument("--bucket", default="rootmos-sounds", help="S3 bucket")
     parser.add_argument("--cache", default=default_cache, help="cache")
 
@@ -215,7 +215,7 @@ def compute_sha1_md5(fn):
 
 def record_cmd(args):
     fn_template = "%Y-%m-%dT%H:%M:%S%z.mp3"
-    title_template = "Session @ %Y-%m-%dT%H:%M:%S%z"
+    title_template = "Auto-recorded session @ %Y-%m-%dT%H:%M:%S%z"
     artist = "rootmos"
     composer = "Gustav Behm"
 
@@ -282,6 +282,7 @@ def record_cmd(args):
                         ContentMD5 = str(b64encode(md5), "UTF-8"))
 
             logger.debug(f"processed: filename={fn.name} date={d} sha1={sha1.hex()} md5={md5.hex()} length={duration} mimetype={mimetype} url={url}")
+            logger.info(f"uploaded: {s.title}")
 
     class StateE(Enum):
         WAITING = 1
@@ -319,12 +320,18 @@ def record_cmd(args):
             raise RuntimeError(f"trac terminated with non-zero exit code: {ec}")
 
     async def loop():
+        pps = set()
         while True:
             wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
             logger.debug(f"workdir: {wd.name}")
-            await record(wd)
-            # postprocess(wd)
-            break
+            r = asyncio.create_task(record(wd))
+            pps.add(r)
+            while True:
+                done, pending = await asyncio.wait(pps)
+                pps -= done
+                if r in done:
+                    pps.add(asyncio.create_task(asyncio.to_thread(postprocess, wd)))
+                    break
 
     asyncio.run(loop())
 
