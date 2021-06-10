@@ -17,9 +17,9 @@ struct options {
     unsigned int channels;
     unsigned int rate;
 
-    size_t buffer_seconds;
-    float fade_in_seconds;
-    float fade_out_seconds;
+    float buffer_seconds;
+    float lead_in_seconds;
+    float lead_out_seconds;
     float graceperiod_seconds;
     float threshold_percent;
 
@@ -35,8 +35,13 @@ static void print_usage(int fd, const char* prog)
     dprintf(fd, "usage: %s [OPTION]... FILENAME_TEMPLATE\n", prog);
     dprintf(fd, "\n");
     dprintf(fd, "options:\n");
-    dprintf(fd, "  -m MS  send and log audio measurements every MS milliseconds\n");
-    dprintf(fd, "  -M FD  send audio measurements and metadata to FD\n");
+    dprintf(fd, "  -m MS       send and log audio measurements every MS milliseconds\n");
+    dprintf(fd, "  -M FD       send audio measurements and metadata to FD\n");
+    dprintf(fd, "  -s SEC      stop after detecting SEC seconds of silence\n");
+    dprintf(fd, "  -l SEC      add SEC of sound leading in to sound threshold trigger\n");
+    dprintf(fd, "  -L SEC      add SEC of sound leading out from silence threshold trigger\n");
+    dprintf(fd, "  -B SEC      buffer SEC seconds of sound\n");
+    dprintf(fd, "  -t PERCENT  consider a sample value below PERCENT percent of maximum as noise/silence\n");
 }
 
 void parse_opts(struct options* opts, int argc, char* argv[])
@@ -46,10 +51,10 @@ void parse_opts(struct options* opts, int argc, char* argv[])
     opts->channels = 2;
     opts->rate = 44100;
 
-    opts->buffer_seconds = 10.0;
-    opts->fade_in_seconds = 0.2;
-    opts->fade_out_seconds = 0.2;
-    opts->graceperiod_seconds = 2;
+    opts->buffer_seconds = 15.0;
+    opts->lead_in_seconds = 0.2;
+    opts->lead_out_seconds = 0.2;
+    opts->graceperiod_seconds = 10.0;
     opts->threshold_percent = 1.0;
 
     opts->monitor_period_ms = 100;
@@ -59,8 +64,29 @@ void parse_opts(struct options* opts, int argc, char* argv[])
     opts->monitor_fd = -1;
 
     int res;
-    while((res = getopt(argc, argv, "m:M:h")) != -1) {
+    while((res = getopt(argc, argv, "B:l:L:m:M:s:t:h")) != -1) {
         switch(res) {
+        case 'B':
+            res = sscanf(optarg, "%f", &opts->buffer_seconds);
+            if(res != 1 || opts->buffer_seconds < 0.0) {
+                dprintf(2, "unable to parse as non-negative seconds: %s\n", optarg);
+                exit(1);
+            }
+            break;
+        case 'l':
+            res = sscanf(optarg, "%f", &opts->lead_in_seconds);
+            if(res != 1 || opts->lead_in_seconds < 0.0) {
+                dprintf(2, "unable to parse as non-negative seconds: %s\n", optarg);
+                exit(1);
+            }
+            break;
+        case 'L':
+            res = sscanf(optarg, "%f", &opts->lead_out_seconds);
+            if(res != 1 || opts->lead_out_seconds < 0.0) {
+                dprintf(2, "unable to parse as non-negative seconds: %s\n", optarg);
+                exit(1);
+            }
+            break;
         case 'm':
             res = sscanf(optarg, "%d", &opts->monitor_period_ms);
             if(res != 1) {
@@ -72,6 +98,21 @@ void parse_opts(struct options* opts, int argc, char* argv[])
             res = sscanf(optarg, "%d", &opts->monitor_fd);
             if(res != 1) {
                 dprintf(2, "unable to parse monitor fd: %s\n", optarg);
+                exit(1);
+            }
+            break;
+        case 's':
+            res = sscanf(optarg, "%f", &opts->graceperiod_seconds);
+            if(res != 1 || opts->graceperiod_seconds < 0.0) {
+                dprintf(2, "unable to parse as non-negative seconds: %s\n", optarg);
+                exit(1);
+            }
+            break;
+        case 't':
+            res = sscanf(optarg, "%f", &opts->threshold_percent);
+            if(res != 1 || opts->threshold_percent < 0.0
+               || opts->threshold_percent > 100.0) {
+                dprintf(2, "unable to parse as percent: %s\n", optarg);
                 exit(1);
             }
             break;
@@ -117,12 +158,13 @@ struct state {
     void* buf;
     size_t f, fi, fe, fj, fn, r;
 
-    size_t fade_in_frames;
-    size_t fade_out_frames;
+    size_t lead_in_frames;
+    size_t lead_out_frames;
     size_t grace_frames;
     usample_t threshold;
     usample_t global_peak;
     size_t silent_frames;
+    int silence_warning_issued;
 
     int mfd;
     int tfd;
@@ -147,16 +189,16 @@ static void monitor_init(struct state* st, const struct options* opts)
         set_blocking(st->mfd, 0);
     }
 
-    st->fade_in_frames = opts->fade_in_seconds * opts->rate;
-    if(st->fade_in_frames > st->fn) {
-        failwith("buffer too small for %f seconds of fade in",
-                 opts->fade_in_seconds);
+    st->lead_in_frames = opts->lead_in_seconds * opts->rate;
+    if(st->lead_in_frames > st->fn) {
+        failwith("buffer too small for %f seconds of lead in",
+                 opts->lead_in_seconds);
     }
 
-    st->fade_out_frames = opts->fade_out_seconds * opts->rate;
-    if(st->fade_out_frames > st->fn) {
-        failwith("buffer too small for %f seconds of fade out",
-                 opts->fade_out_seconds);
+    st->lead_out_frames = opts->lead_out_seconds * opts->rate;
+    if(st->lead_out_frames > st->fn) {
+        failwith("buffer too small for %f seconds of lead out",
+                 opts->lead_out_seconds);
     }
 
     st->grace_frames = opts->graceperiod_seconds * opts->rate;
@@ -265,7 +307,7 @@ static void monitor_handle_new_frames(struct state* st,
         }
     }
 
-    // silent frames
+    // silent frames: TODO move this to alsa_handle_read
     for(size_t i = 0; i < n; i++) {
         int silent = 1;
         for(size_t j = 0; j < st->channels; j++) {
@@ -273,15 +315,16 @@ static void monitor_handle_new_frames(struct state* st,
             if((s >= 0 && s > st->threshold)
                || (s < 0 && -s > st->threshold)) {
                 silent = st->silent_frames = 0;
-                st->fe = f0 + i;
-                if(st->fe == st->fn) {
-                    st->fe = 0;
-                }
                 break;
             }
         }
         if(silent) {
             st->silent_frames += 1;
+        } else {
+            st->fe = f0 + i;
+            if(st->fe == st->fn) {
+                st->fe = 0;
+            }
         }
     }
 
@@ -358,16 +401,16 @@ static int monitor_check_for_sound(struct state* st)
 
     if(st->fi <= st->fj) {
         size_t n = st->fj - st->fi;
-        if(n > st->fade_in_frames) {
-            st->fi = st->fj - st->fade_in_frames;
+        if(n > st->lead_in_frames) {
+            st->fi = st->fj - st->lead_in_frames;
         }
     } else {
         size_t n = st->fn - st->fi;
-        if(n + st->fj > st->fade_in_frames) {
-            if(st->fade_in_frames <= st->fj) {
-                st->fi = st->fj - st->fade_in_frames;
+        if(n + st->fj > st->lead_in_frames) {
+            if(st->lead_in_frames <= st->fj) {
+                st->fi = st->fj - st->lead_in_frames;
             } else {
-                st->fi += st->fade_in_frames - st->fj;
+                st->fi += st->lead_in_frames - st->fj;
             }
         }
     }
@@ -375,16 +418,16 @@ static int monitor_check_for_sound(struct state* st)
     return 0;
 }
 
-static void add_fade_out_frames(struct state* st)
+static void add_lead_out_frames(struct state* st)
 {
-    if(st->fi <= st->fj) {
-        st->fe = MIN(st->fj, st->fe + st->fade_out_frames);
+    if(st->fe <= st->fj) {
+        st->fe = MIN(st->fj, st->fe + st->lead_out_frames);
     } else {
-        size_t n = st->fn - st->fi;
-        if(n <= st->fade_out_frames) {
-            st->fe += st->fade_out_frames;
+        size_t n = st->fn - st->fe;
+        if(n >= st->lead_out_frames) {
+            st->fe += st->lead_out_frames;
         } else {
-            size_t m = st->fade_in_frames - n;
+            size_t m = st->lead_out_frames - n;
             st->fe = MIN(m, st->fj);
         }
     }
@@ -621,6 +664,7 @@ int main(int argc, char* argv[])
 
     struct state st = {
         .state = STATE_UNINITIALIZED,
+        0
     };
 
     alsa_init(&st, &opts);
@@ -643,7 +687,8 @@ int main(int argc, char* argv[])
         fds[1] = (struct pollfd) { .fd = st.enc_fd, .events = 0 };
         fds[2] = (struct pollfd) { .fd = st.tfd, .events = POLLIN };
 
-        if(st.state == STATE_RECORDING && frames_available_to_encode(&st)) {
+        if((st.state == STATE_RECORDING || st.state == STATE_RECORDING_SILENCE)
+           && frames_available_to_encode(&st)) {
             fds[1].events |= POLLOUT;
         }
 
@@ -702,10 +747,19 @@ int main(int argc, char* argv[])
         if(st.state == STATE_RECORDING_SILENCE) {
             if(st.silent_frames == 0) {
                 st.state = STATE_RECORDING;
+                if(st.silence_warning_issued) {
+                    st.silence_warning_issued = 0;
+                    info("resuming");
+                }
             } else if(st.silent_frames >= st.grace_frames) {
                 info("long silence detected");
                 st.state = STATE_STOPPING;
-                add_fade_out_frames(&st);
+                add_lead_out_frames(&st);
+            } else if(st.silent_frames >= st.grace_frames/2 &&
+                      !st.silence_warning_issued) {
+                info("silence detected: will stop in approximately %.2f seconds",
+                     opts.graceperiod_seconds/2);
+                st.silence_warning_issued = 1;
             }
         }
     }
