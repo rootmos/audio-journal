@@ -156,6 +156,7 @@ class Sound:
         self.datetime = datetime
         self.filename = filename
         self.mimetype = mimetype
+        self.local = None
 
     def from_json(j):
         return Sound(
@@ -253,7 +254,23 @@ def load_sounds(args):
                 ss.add(s)
 
         if p.local is not None:
-            pass
+            def load(f):
+                s = Sound.from_json(json.loads(f.read_text()))
+                s.local = f.parent / s.filename
+                ss.add(s)
+
+            l = pathlib.Path(p.local).expanduser()
+            if p.prefix is not None:
+                l /= p.prefix
+
+            def go(d):
+                for f in d.iterdir():
+                    if f.is_dir():
+                        go(f)
+                    else:
+                        if f.name.endswith(".json"):
+                            load(f)
+            go(l)
 
     return ss
 
@@ -261,7 +278,10 @@ def list_cmd(args):
     ss = load_sounds(args)
 
     for s in sorted(ss, key=lambda s: s.datetime):
-        print(s.url)
+        if s.local is not None:
+            print(s.local)
+        elif s.url is not None:
+            print(s.url)
 
 def compute_sha1_md5(fn):
     with open(fn, mode="rb") as f:
