@@ -11,12 +11,14 @@ import logging
 import mimetypes
 import os
 import pathlib
+import queue
 import re
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import urllib
 
 from enum import Enum
@@ -310,7 +312,7 @@ def compute_sha1_md5(fn):
             md5.update(bs)
         return (sha1.digest(), md5.digest())
 
-def postprocess(profile, wd):
+def postprocess(profile, wd, callback=None):
     b = None
     if profile.bucket is not None:
         b = s3.Bucket(bucket)
@@ -406,15 +408,25 @@ def postprocess(profile, wd):
     else:
         logger.info(f"successfully processed: {s.title}")
 
-def record_cmd(args):
-    profile = resolve_profile(args, args.profile)
-    logger.debug(f"recording using profile: {profile}")
+    if callback is not None:
+        callback(s)
 
-    class StateE(Enum):
-        WAITING = 1
-        RECORDING = 2
-        SILENCE = 3
-        STOPPING = 4
+class StateE(Enum):
+    UNDEFINED = 0
+    WAITING = 1
+    RECORDING = 2
+    SILENCE = 3
+    STOPPING = 4
+
+class RecordingStateUpdate:
+    def __init__(self, state, peak, rms):
+        self.state = state
+        self.peak = peak
+        self.rms = rms
+
+async def record(profile, wd, handle_state_update=None):
+    r, w = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+    w.set_inheritable(True)
 
     class Server:
         def connection_made(self, transport):
@@ -425,48 +437,48 @@ def record_cmd(args):
             rms = int.from_bytes(data[1:2], byteorder=sys.byteorder)
             peak = int.from_bytes(data[3:5], byteorder=sys.byteorder)
             logger.debug(f"received monitoring data: state={state} rms={rms} peak={peak}")
+            u = RecordingStateUpdate(state=state, rms=rms, peak=peak)
+            handle_state_update(u)
 
-    async def record(wd):
-        r, w = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
-        w.set_inheritable(True)
-
+    trec = os.environ.get("TREC", default="trec")
+    args = []
+    if handle_state_update is not None:
         loop = asyncio.get_running_loop()
         transport, protocol = await loop.create_datagram_endpoint(lambda: Server(), sock=r)
+        args.extend([ "-M", str(w.fileno()), "-m", str(10) ])
+    args.append(f"{wd.name}/{profile.filename}")
+    p = await asyncio.create_subprocess_exec(trec, *args, close_fds=False)
+    w.close()
+    ec = await p.wait()
+    if ec != 0:
+        raise RuntimeError(f"{trec} terminated with non-zero exit code: {ec}")
 
-        trec = os.environ.get("TREC", default="trec")
-        p = await asyncio.create_subprocess_exec(
-                trec,
-                "-M", str(w.fileno()),
-                "-m", str(10),
-                f"{wd.name}/{profile.filename}",
-                close_fds=False)
-        w.close()
-        ec = await p.wait()
-        if ec != 0:
-            raise RuntimeError(f"trac terminated with non-zero exit code: {ec}")
-
-    async def loop():
-        pps = set()
+async def record_loop(profile, handle_state_update=None, sound_callback=None):
+    pps = set()
+    while True:
+        wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
+        logger.debug(f"workdir: {wd.name}")
+        r = asyncio.create_task(record(profile, wd, handle_state_update))
+        pps.add(r)
         while True:
-            wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
-            logger.debug(f"workdir: {wd.name}")
-            r = asyncio.create_task(record(wd))
-            pps.add(r)
-            while True:
-                done, pending = await asyncio.wait(pps)
-                pps -= done
-                if r in done:
-                    pps.add(asyncio.create_task(asyncio.to_thread(postprocess, profile, wd)))
-                    break
+            done, pending = await asyncio.wait(pps)
+            pps -= done
+            if r in done:
+                pps.add(asyncio.create_task(asyncio.to_thread(postprocess, profile, wd, sound_callback)))
+                break
+
+def record_cmd(args):
+    profile = resolve_profile(args, args.profile)
+    logger.debug(f"recording using profile: {profile}")
 
     async def oneshot():
         wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
         logger.debug(f"workdir: {wd.name}")
-        await record(wd)
-        postprocess(profile, wd)
+        await record(profile, wd, None)
+        postprocess(profile, wd, None)
 
     if args.loop:
-        asyncio.run(loop())
+        asyncio.run(record_loop(profile))
     else:
         asyncio.run(oneshot())
 
@@ -474,7 +486,6 @@ def gui(args):
     ss = load_sounds(args)
 
     import tkinter as tk
-    import tkinter.font as tkf
     from tkinter import ttk
 
     root = tk.Tk()
@@ -486,8 +497,7 @@ def gui(args):
     for s in sorted(ss, key=lambda s: s.datetime):
         sounds.insert("", "end", hash(s), text=s.title, values=(render_duration(round(s.length)),))
 
-    f = tkf.nametofont('TkFixedFont')
-    status = ttk.Label(root, text='00:00:00.000', font=f, anchor="center", relief="sunken")
+    status = ttk.Label(root, text='00:00:00.000', font="TkFixedFont", anchor="center", relief="sunken")
     status.grid(row=1, rowspan=2, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
 
     peak = ttk.Progressbar(root, orient=tk.HORIZONTAL, mode="determinate", maximum=32767)
@@ -507,7 +517,42 @@ def gui(args):
 
     root.bind("<Escape>", lambda e: root.destroy())
 
+    update_queue = queue.Queue()
+    def generate_state_update_event(update):
+        update_queue.put(update, block=False)
+        root.event_generate("<<RecordingStateUpdate>>")
+
+    def handle_recording_state_update(*args):
+        update = None
+        while True:
+            try:
+                update = update_queue.get(block=False)
+            except queue.Empty:
+                break
+        logger.debug(f"received update: {update}")
+
+        rms["value"] = update.rms
+        peak["value"] = update.peak
+
+        if update.state == StateE.RECORDING:
+            status["background"] = "red"
+        elif update.state == StateE.SILENCE:
+            status["background"] = "violet"
+
+    root.bind("<<RecordingStateUpdate>>", handle_recording_state_update);
+
+    def generate_new_sound_event(s):
+        root.event_generate("<<NewSound>>")
+
+    profile = resolve_profile(args, None)
+    t = threading.Thread(target=lambda: asyncio.run(
+        record_loop(profile,
+            handle_state_update=generate_state_update_event,
+            sound_callback=generate_new_sound_event)))
+    t.start()
+
     root.mainloop()
+    t.join()
 
 if __name__ == "__main__":
     args = parse_args()
