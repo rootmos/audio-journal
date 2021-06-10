@@ -51,16 +51,18 @@ def parse_args():
 
     home = pathlib.Path.home()
     default_cache = home / ".cache" / "audio-journal"
+    config = home / ".config" / "audio-journal"
 
     parser.add_argument("--log", default="INFO", help="set log level")
-    parser.add_argument("--bucket", default="rootmos-sounds", help="S3 bucket")
     parser.add_argument("--cache", default=default_cache, help="cache")
+    parser.add_argument("--config", default=config, help="config")
 
     list_cmd = subparsers.add_parser("list", help="list sounds")
-    list_cmd.add_argument("prefix", metavar="PREFIX", nargs="*")
+    list_cmd.add_argument("profile", metavar="PROFILE", nargs="*")
 
     record = subparsers.add_parser("record", help="record track")
     record.add_argument("--loop", action="store_true", help="continuously record and process sounds")
+    record.add_argument("profile", metavar="PROFILE", nargs="?")
 
     gui = subparsers.add_parser("gui", help="run the GUI")
 
@@ -180,42 +182,6 @@ class Sound:
             "date": self.datetime.isoformat()
         }
 
-def load_sounds(args):
-    b = s3.Bucket(args.bucket)
-
-    if len(args.prefix) == 0:
-        i = b.objects.all()
-    else:
-        i = itertools.chain(*[b.objects.filter(Prefix=p) for p in args.prefix])
-
-    ss = set()
-    for o in i:
-        if not o.key.endswith(".json"):
-            continue
-
-        j = cache(b.name, o.key, o.e_tag).json(lambda: json.loads(o.get()["Body"].read()))
-        s = Sound.from_json(j)
-        ss.add(s)
-
-    return ss
-
-def list_cmd(args):
-    ss = load_sounds(args)
-
-    for s in sorted(ss, key=lambda s: s.datetime):
-        print(s.url)
-
-def compute_sha1_md5(fn):
-    with open(fn, mode="rb") as f:
-        sha1 = hashlib.sha1()
-        md5 = hashlib.md5()
-        while True:
-            bs = f.read(4096)
-            if len(bs) == 0: break
-            sha1.update(bs)
-            md5.update(bs)
-        return (sha1.digest(), md5.digest())
-
 class Profile:
     def __init__(self, filename, bucket, local, title, artist, composer, prefix):
         self.filename = filename
@@ -245,6 +211,68 @@ class Profile:
                 artist = j.get("artist"),
                 composer = j.get("composer"),
                 prefix = j.get("prefix"))
+
+def resolve_profile(args, profile=None):
+    d = pathlib.Path(args.config) / "profiles"
+
+    if profile is None:
+        f = d / "default"
+        if not f.exists():
+            return Profile.default()
+    else:
+        f = d / profile
+
+    if f.exists():
+        return Profile.from_json(json.loads(f.read_text()))
+    else:
+        raise RuntimeError(f"can not load profile: {f}")
+
+def load_sounds(args):
+    ss = set()
+    if len(args.profile) == 0:
+        ps = [ resolve_profile(args, None) ]
+    else:
+        ps = [ resolve_profile(args, p) for p in args.profile ]
+    logger.debug(f"listing sounds: {ps}")
+
+    for p in ps:
+        if p.bucket is not None:
+            b = s3.Bucket(p.bucket)
+
+            if len(args.prefix) == 0:
+                i = b.objects.all()
+            else:
+                i = itertools.chain(*[b.objects.filter(Prefix=p) for p in args.prefix])
+
+            for o in i:
+                if not o.key.endswith(".json"):
+                    continue
+
+                j = cache(b.name, o.key, o.e_tag).json(lambda: json.loads(o.get()["Body"].read()))
+                s = Sound.from_json(j)
+                ss.add(s)
+
+        if p.local is not None:
+            pass
+
+    return ss
+
+def list_cmd(args):
+    ss = load_sounds(args)
+
+    for s in sorted(ss, key=lambda s: s.datetime):
+        print(s.url)
+
+def compute_sha1_md5(fn):
+    with open(fn, mode="rb") as f:
+        sha1 = hashlib.sha1()
+        md5 = hashlib.md5()
+        while True:
+            bs = f.read(4096)
+            if len(bs) == 0: break
+            sha1.update(bs)
+            md5.update(bs)
+        return (sha1.digest(), md5.digest())
 
 def postprocess(profile, wd):
     b = None
@@ -322,7 +350,7 @@ def postprocess(profile, wd):
                 ContentMD5 = str(b64encode(md5), "UTF-8"))
 
     if profile.local is not None:
-        d = pathlib.Path(profile.local)
+        d = pathlib.Path(profile.local).expanduser()
         if profile.prefix is not None:
             d = d / pathlib.Path(profile.prefix)
 
@@ -343,7 +371,8 @@ def postprocess(profile, wd):
         logger.info(f"successfully processed: {s.title}")
 
 def record_cmd(args):
-    profile = Profile.default()
+    profile = resolve_profile(args, args.profile)
+    logger.debug(f"recording using profile: {profile}")
 
     class StateE(Enum):
         WAITING = 1
