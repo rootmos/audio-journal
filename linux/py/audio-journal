@@ -315,7 +315,7 @@ def compute_sha1_md5(fn):
 def postprocess(profile, wd, callback=None):
     b = None
     if profile.bucket is not None:
-        b = s3.Bucket(bucket)
+        b = s3.Bucket(profile.bucket)
         bl = s3_client.get_bucket_location(Bucket=b.name)["LocationConstraint"]
 
     [fn] = pathlib.Path(wd.name).iterdir()
@@ -337,7 +337,7 @@ def postprocess(profile, wd, callback=None):
 
     if b is not None:
         if profile.prefix is not None:
-            key = f"{args.prefix}/{fn.name}"
+            key = f"{profile.prefix}/{fn.name}"
         else:
             key = fn.name
 
@@ -371,8 +371,8 @@ def postprocess(profile, wd, callback=None):
                     ContentType = mimetype,
                     ContentMD5 = str(b64encode(md5), "UTF-8"))
 
-        if args.prefix is not None:
-            key = f"{args.prefix}/{fn.stem}.json"
+        if profile.prefix is not None:
+            key = f"{profile.prefix}/{fn.stem}.json"
         else:
             key = f"{fn.stem}.json"
 
