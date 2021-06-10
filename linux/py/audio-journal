@@ -26,6 +26,21 @@ from datetime import date, time, datetime
 s3 = boto3.resource("s3")
 s3_client = boto3.client("s3")
 
+def render_duration(secs):
+    s = ""
+    if secs >= 60 * 60 * 24:
+        s += f"{secs // (60 * 60 * 24)}d"
+        secs %= 60 * 60 * 24
+    if secs >= 60 * 60:
+        s += f"{secs // (60 * 60)}h"
+        secs %= 60 * 60
+    if secs >= 60:
+        s += f"{secs // 60}m"
+        secs %= 60
+    if secs > 0:
+        s += f"{secs}s"
+    return s
+
 logger = None
 def setup_logger(level):
     l = logging.getLogger("audio-journal")
@@ -65,6 +80,7 @@ def parse_args():
     record.add_argument("profile", metavar="PROFILE", nargs="?")
 
     gui = subparsers.add_parser("gui", help="run the GUI")
+    gui.add_argument("profile", metavar="PROFILE", nargs="*")
 
     return parser.parse_args()
 
@@ -454,6 +470,45 @@ def record_cmd(args):
     else:
         asyncio.run(oneshot())
 
+def gui(args):
+    ss = load_sounds(args)
+
+    import tkinter as tk
+    import tkinter.font as tkf
+    from tkinter import ttk
+
+    root = tk.Tk()
+    root.title("audio-journal")
+
+    sounds = ttk.Treeview(root, columns=("duration",), selectmode="browse")
+    sounds.heading("duration", text="Duration")
+    sounds.grid(row=0, column=0, columnspan=3, sticky=(tk.N, tk.S, tk.E, tk.W))
+    for s in sorted(ss, key=lambda s: s.datetime):
+        sounds.insert("", "end", hash(s), text=s.title, values=(render_duration(round(s.length)),))
+
+    f = tkf.nametofont('TkFixedFont')
+    status = ttk.Label(root, text='00:00:00.000', font=f, anchor="center", relief="sunken")
+    status.grid(row=1, rowspan=2, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
+
+    peak = ttk.Progressbar(root, orient=tk.HORIZONTAL, mode="determinate", maximum=32767)
+    peak.grid(row=1, column=1, sticky=(tk.N, tk.S, tk.E, tk.W))
+    rms = ttk.Progressbar(root, orient=tk.HORIZONTAL, mode="determinate", maximum=32767)
+    rms.grid(row=2, column=1, sticky=(tk.N, tk.S, tk.E, tk.W))
+
+    profiles = tk.Listbox(root, height=10)
+    profiles.grid(row=1, rowspan=2, column=2, sticky=(tk.N, tk.S, tk.E, tk.W))
+
+    root.columnconfigure(0, weight=1)
+    root.columnconfigure(1, weight=5)
+    root.columnconfigure(2, weight=2)
+    root.rowconfigure(0, weight=100)
+    root.rowconfigure(1, weight=1)
+    root.rowconfigure(2, weight=1)
+
+    root.bind("<Escape>", lambda e: root.destroy())
+
+    root.mainloop()
+
 if __name__ == "__main__":
     args = parse_args()
     logger = setup_logger(args.log.upper())
@@ -465,5 +520,7 @@ if __name__ == "__main__":
         list_cmd(args)
     elif args.command == "record":
         record_cmd(args)
+    elif args.command == "gui":
+        gui(args)
     else:
         raise NotImplementedError(f"subcommand {args.command}")
