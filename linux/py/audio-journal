@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-import asyncio
 import argparse
+import asyncio
 import boto3
 import eyed3
 import hashlib
@@ -9,14 +9,15 @@ import itertools
 import json
 import logging
 import mimetypes
+import os
 import pathlib
 import re
+import shutil
+import socket
 import subprocess
+import sys
 import tempfile
 import urllib
-import os
-import socket
-import sys
 
 from enum import Enum
 from base64 import b64encode
@@ -59,7 +60,9 @@ def parse_args():
     list_cmd.add_argument("prefix", metavar="PREFIX", nargs="*")
 
     record = subparsers.add_parser("record", help="record track")
-    record.add_argument("--prefix", help="prefix")
+    record.add_argument("--loop", action="store_true", help="continuously record and process sounds")
+
+    gui = subparsers.add_parser("gui", help="run the GUI")
 
     return parser.parse_args()
 
@@ -213,76 +216,134 @@ def compute_sha1_md5(fn):
             md5.update(bs)
         return (sha1.digest(), md5.digest())
 
-def record_cmd(args):
-    fn_template = "%Y-%m-%dT%H:%M:%S%z.mp3"
-    title_template = "Auto-recorded session @ %Y-%m-%dT%H:%M:%S%z"
-    artist = "rootmos"
-    composer = "Gustav Behm"
+class Profile:
+    def __init__(self, filename, bucket, local, title, artist, composer, prefix):
+        self.filename = filename
+        self.bucket = bucket
+        self.local = local
+        self.title = title
+        self.artist = artist
+        self.composer = composer
+        self.prefix = prefix
 
-    def postprocess(wd):
-        b = s3.Bucket(args.bucket)
+    def default():
+        return Profile(
+                filename = "%Y-%m-%dT%H:%M:%S%z.mp3",
+                title = "Session @ %Y-%m-%dT%H:%M:%S%z",
+                local = pathlib.Path.home() / "audio-journal",
+                bucket = None,
+                artist = None,
+                composer = None,
+                prefix = None)
+
+    def from_json(j):
+        return Profile(
+                filename = j["filename"],
+                bucket = j.get("bucket"),
+                local = j.get("local"),
+                title = j.get("title"),
+                artist = j.get("artist"),
+                composer = j.get("composer"),
+                prefix = j.get("prefix"))
+
+def postprocess(profile, wd):
+    b = None
+    if profile.bucket is not None:
+        b = s3.Bucket(bucket)
         bl = s3_client.get_bucket_location(Bucket=b.name)["LocationConstraint"]
-        p = pathlib.Path(wd.name)
-        for fn in p.iterdir():
-            d = datetime.strptime(fn.name, fn_template)
-            af = eyed3.load(fn)
-            af.tag = eyed3.id3.Tag()
-            af.tag.artist = artist
-            af.tag.title = d.strftime(title_template)
-            af.tag.composer = composer
-            af.tag.recording_date = d.date().isoformat()
-            af.tag.save()
-            duration = af.info.time_secs
-            mimetype, _ = mimetypes.guess_type(fn)
-            sha1, md5 = compute_sha1_md5(fn)
 
-            if args.prefix is not None:
-                key = f"{args.prefix}/{fn.name}"
-            else:
-                key = fn.name
+    [fn] = pathlib.Path(wd.name).iterdir()
 
-            with open(fn, mode="rb") as f:
-                b.put_object(
-                        Key = key,
-                        ACL = "public-read",
-                        Body = f,
-                        ContentType = mimetype,
-                        ContentMD5 = str(b64encode(md5), "UTF-8"))
+    d = datetime.strptime(fn.name, profile.filename)
+    af = eyed3.load(fn)
+    af.tag = eyed3.id3.Tag()
+    af.tag.recording_date = d.date().isoformat()
+    if profile.artist is not None:
+        af.tag.artist = profile.artist
+    if profile.title is not None:
+        af.tag.title = d.strftime(profile.title)
+    if profile.composer is not None:
+        af.tag.composer = profile.composer
+    af.tag.save()
+    duration = af.info.time_secs
+    mimetype, _ = mimetypes.guess_type(fn)
+    sha1, md5 = compute_sha1_md5(fn)
 
-            url = "https://%s.s3.%s.amazonaws.com/%s" % (
-                    b.name,
-                    bl,
-                    urllib.parse.quote(key, safe="~()*!.'/"))
+    if b is not None:
+        if profile.prefix is not None:
+            key = f"{args.prefix}/{fn.name}"
+        else:
+            key = fn.name
 
-            s = Sound(
-                    title = af.tag.title,
-                    artist = af.tag.artist,
-                    composer = af.tag.composer,
-                    length = duration,
-                    url = url,
-                    sha1 = sha1.hex(),
-                    datetime = d,
-                    filename = fn.name,
-                    mimetype = mimetype)
+        url = "https://%s.s3.%s.amazonaws.com/%s" % (
+                b.name,
+                bl,
+                urllib.parse.quote(key, safe="~()*!.'/"))
+    else:
+        url = None
 
-            if args.prefix is not None:
-                key = f"{args.prefix}/{fn.stem}.json"
-            else:
-                key = f"{fn.stem}.json"
+    s = Sound(
+            title = af.tag.title,
+            artist = af.tag.artist,
+            composer = af.tag.composer,
+            length = duration,
+            url = url,
+            sha1 = sha1.hex(),
+            datetime = d,
+            filename = fn.name,
+            mimetype = mimetype)
 
-            m = bytes(json.dumps(s.to_json()), "UTF-8")
-            md5 = hashlib.md5()
-            md5.update(m)
-            md5 = md5.digest()
+    metadata = bytes(json.dumps(s.to_json()), "UTF-8")
+
+    if b is not None:
+        logger.debug(f"uploading sound file: s3://{b.name}/{key}")
+        with open(fn, mode="rb") as f:
             b.put_object(
-                        Key = key,
-                        ACL = "public-read",
-                        Body = m,
-                        ContentType = "application/json",
-                        ContentMD5 = str(b64encode(md5), "UTF-8"))
+                    Key = key,
+                    ACL = "public-read",
+                    Body = f,
+                    ContentType = mimetype,
+                    ContentMD5 = str(b64encode(md5), "UTF-8"))
 
-            logger.debug(f"processed: filename={fn.name} date={d} sha1={sha1.hex()} md5={md5.hex()} length={duration} mimetype={mimetype} url={url}")
-            logger.info(f"uploaded: {s.title}")
+        if args.prefix is not None:
+            key = f"{args.prefix}/{fn.stem}.json"
+        else:
+            key = f"{fn.stem}.json"
+
+        md5 = hashlib.md5()
+        md5.update(metadata)
+        md5 = md5.digest()
+        logger.debug(f"uploading sound metadata: s3://{b.name}/{key}")
+        b.put_object(
+                Key = key,
+                ACL = "public-read",
+                Body = metadata,
+                ContentType = "application/json",
+                ContentMD5 = str(b64encode(md5), "UTF-8"))
+
+    if profile.local is not None:
+        d = pathlib.Path(profile.local)
+        if profile.prefix is not None:
+            d = d / pathlib.Path(profile.prefix)
+
+        if not d.exists():
+            d.mkdir(parents=True)
+
+        target = d / fn.name
+        logger.debug(f"copying local sound file: {target}")
+        shutil.copy(fn, target)
+
+        target = d / f"{fn.stem}.json"
+        logger.debug(f"writing local sound metadata: {target}")
+        target.write_bytes(metadata)
+
+    if logger.level <= logging.DEBUG:
+        logger.debug(f"successfully processed sound: filename={fn.name} date={d} sha1={sha1.hex()} md5={md5.hex()} length={duration} mimetype={mimetype} url={url}")
+    else:
+        logger.info(f"successfully processed: {s.title}")
+
+def record_cmd(args):
+    profile = Profile.default()
 
     class StateE(Enum):
         WAITING = 1
@@ -312,7 +373,7 @@ def record_cmd(args):
                 trec,
                 "-M", str(w.fileno()),
                 "-m", str(10),
-                f"{wd.name}/{fn_template}",
+                f"{wd.name}/{profile.filename}",
                 close_fds=False)
         w.close()
         ec = await p.wait()
@@ -330,10 +391,19 @@ def record_cmd(args):
                 done, pending = await asyncio.wait(pps)
                 pps -= done
                 if r in done:
-                    pps.add(asyncio.create_task(asyncio.to_thread(postprocess, wd)))
+                    pps.add(asyncio.create_task(asyncio.to_thread(postprocess, profile, wd)))
                     break
 
-    asyncio.run(loop())
+    async def oneshot():
+        wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
+        logger.debug(f"workdir: {wd.name}")
+        await record(wd)
+        postprocess(profile, wd)
+
+    if args.loop:
+        asyncio.run(loop())
+    else:
+        asyncio.run(oneshot())
 
 if __name__ == "__main__":
     args = parse_args()
