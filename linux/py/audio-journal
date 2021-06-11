@@ -278,10 +278,10 @@ def load_sounds(args):
         if p.bucket is not None:
             b = s3.Bucket(p.bucket)
 
-            if len(args.prefix) == 0:
+            if len(p.prefix) == 0:
                 i = b.objects.all()
             else:
-                i = itertools.chain(*[b.objects.filter(Prefix=p) for p in args.prefix])
+                i = itertools.chain(*[b.objects.filter(Prefix=p) for p in p.prefix])
 
             for o in i:
                 if not o.key.endswith(".json"):
@@ -302,6 +302,8 @@ def load_sounds(args):
                 l /= p.prefix
 
             def go(d):
+                if not d.exists():
+                    return
                 for f in d.iterdir():
                     if f.is_dir():
                         go(f)
