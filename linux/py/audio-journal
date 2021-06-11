@@ -12,6 +12,7 @@ import mimetypes
 import os
 import pathlib
 import queue
+import random
 import re
 import shutil
 import signal
@@ -177,7 +178,7 @@ def lenient_datetime_parse(s):
         return datetime.fromisoformat(t)
 
 class Sound:
-    def __init__(self, title, artist, composer, length, url, sha1, datetime, filename, mimetype):
+    def __init__(self, title, artist, composer, length, url, sha1, datetime, filename, mimetype, prefix):
         self.title = title
         self.artist = artist
         self.composer = composer
@@ -189,7 +190,9 @@ class Sound:
         self.mimetype = mimetype
         self.local = None
 
-    def from_json(j):
+        self.id = hash((prefix, self.filename))
+
+    def from_json(j, prefix):
         return Sound(
                 title = j["title"],
                 artist = j["artist"],
@@ -199,7 +202,8 @@ class Sound:
                 sha1 = j["sha1"],
                 filename = j["filename"],
                 mimetype = j.get("mimetype"),
-                datetime = lenient_datetime_parse(j["date"]))
+                datetime = lenient_datetime_parse(j["date"]),
+                prefix = prefix)
 
     def to_json(self):
         return {
@@ -263,13 +267,13 @@ def resolve_profile(args, profile=None):
         raise RuntimeError(f"can not load profile: {f}")
 
 def load_sounds(args):
-    ss = set()
     if len(args.profile) == 0:
         ps = [ resolve_profile(args, None) ]
     else:
         ps = [ resolve_profile(args, p) for p in args.profile ]
     logger.debug(f"listing sounds: {ps}")
 
+    ss = dict()
     for p in ps:
         if p.bucket is not None:
             b = s3.Bucket(p.bucket)
@@ -284,14 +288,14 @@ def load_sounds(args):
                     continue
 
                 j = cache(b.name, o.key, o.e_tag).json(lambda: json.loads(o.get()["Body"].read()))
-                s = Sound.from_json(j)
-                ss.add(s)
+                s = Sound.from_json(j, prefix=p.prefix)
+                ss[s.id] = s
 
         if p.local is not None:
             def load(f):
-                s = Sound.from_json(json.loads(f.read_text()))
+                s = Sound.from_json(json.loads(f.read_text()), prefix=p.prefix)
                 s.local = f.parent / s.filename
-                ss.add(s)
+                ss[s.id] = s
 
             l = pathlib.Path(p.local).expanduser()
             if p.prefix is not None:
@@ -311,7 +315,7 @@ def load_sounds(args):
 def list_cmd(args):
     ss = load_sounds(args)
 
-    for s in sorted(ss, key=lambda s: s.datetime):
+    for s in sorted(ss.values(), key=lambda s: s.datetime):
         if s.local is not None:
             print(s.local)
         elif s.url is not None:
@@ -371,7 +375,8 @@ def postprocess(profile, fn):
             sha1 = sha1.hex(),
             datetime = date,
             filename = fn.name,
-            mimetype = mimetype)
+            mimetype = mimetype,
+            prefix = profile.prefix)
 
     metadata = bytes(json.dumps(s.to_json()), "UTF-8")
 
@@ -463,28 +468,28 @@ class Recorder:
         if self.process is not None:
             raise NotImplementedError
 
-        r, w = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
-        w.set_inheritable(True)
-
-        class Server:
-            def connection_made(self, transport):
-                pass
-
-            def datagram_received(server, data, addr):
-                state = Recorder.State(data[0])
-                captured_frames = int.from_bytes(data[1:9], byteorder=sys.byteorder)
-                rms = int.from_bytes(data[9:11], byteorder=sys.byteorder)
-                peak = int.from_bytes(data[11:13], byteorder=sys.byteorder)
-                u = Recorder.Update(state=state, captured_frames=captured_frames, rms=rms, peak=peak)
-                for f in self.state_listeners:
-                    f(u)
-
         wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
         logger.debug(f"recording workdir: {wd.name}")
 
         trec = os.environ.get("TREC", default="trec")
         args = [ "-r", str(self.rate) ]
         if len(self.state_listeners) > 0:
+            class Server:
+                def connection_made(self, transport):
+                    pass
+
+                def datagram_received(server, data, addr):
+                    state = Recorder.State(data[0])
+                    captured_frames = int.from_bytes(data[1:9], byteorder=sys.byteorder)
+                    rms = int.from_bytes(data[9:11], byteorder=sys.byteorder)
+                    peak = int.from_bytes(data[11:13], byteorder=sys.byteorder)
+                    u = Recorder.Update(state=state, captured_frames=captured_frames, rms=rms, peak=peak)
+                    for f in self.state_listeners:
+                        f(u)
+
+            r, w = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+            w.set_inheritable(True)
+
             loop = asyncio.get_running_loop()
             transport, protocol = await loop.create_datagram_endpoint(lambda: Server(), sock=r)
             args.extend([ "-M", str(w.fileno()), "-m", str(10) ])
@@ -551,11 +556,150 @@ def record_cmd(args):
                 await pp
         asyncio.run(oneshot())
 
+class Player:
+    def __init__(self):
+        self.players = {}
+        self.current = None
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=lambda: self.loop.run_forever())
+        self.thread.start()
+
+    def _player(self, sound):
+        if sound.id not in self.players:
+            target = sound.local or sound.url
+            if target is None:
+                logger.warn(f"no available source for sound: {sound}")
+                return None
+            self.players[sound.id] = MPV(target)
+
+        return self.players[sound.id]
+
+    def load(self, sound):
+        p = self._player(sound)
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.start()))
+
+    def toggle(self, sound):
+        p = self._player(sound)
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.toggle()))
+
+    def pause(self, sound):
+        p = self._player(sound)
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.pause()))
+
+    def seek(self, sound, **kwargs):
+        p = self._player(sound)
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.seek(**kwargs)))
+
+    def stop(self):
+        async def f():
+            for p in self.players.values():
+                await p.stop()
+            self.loop.stop()
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(f()))
+
+    def join(self):
+        self.thread.join()
+
+class MPV:
+    class State(Enum):
+        UNDEFINED = 0
+        READY = 1
+        PAUSED = 2
+        PLAYING = 3
+        STOPPED = 4
+
+    def __init__(self, target):
+        self.target = target
+        self.started = None
+        self.process = None
+        self.state = MPV.State.UNDEFINED
+        self.ipc = None
+        self.responses = {}
+
+    async def send_command(self, *args):
+        rid = random.randint(0, sys.maxsize)
+        cmd = { "command": args, "async": True, "request_id": rid }
+        logger.debug(f"sending event: {cmd}")
+        self.ipc.send(bytes(json.dumps(cmd) + "\n", "UTF-8"))
+        e = self.responses[rid] = asyncio.Event()
+        await e.wait()
+        rsp = self.responses[rid]
+        if rsp["error"] != "success":
+            raise RuntimeError(f"mpv command failed: cmd={cmd} rsp={rsp}")
+        else:
+            return rsp.get("data")
+
+    async def toggle(self):
+        paused = await self.send_command("get_property", "pause")
+        await self.send_command("set_property", "pause", not paused)
+
+    async def pause(self):
+        await self.send_command("set_property", "pause", True)
+
+    async def resume(self):
+        await self.send_command("set_property", "pause", False)
+
+    async def seek(self, relative=None, absolute=None):
+        if relative is not None:
+            await self.send_command("seek", relative, "relative")
+        if absolute is not None:
+            await self.send_command("seek", absolute, "absolute")
+
+    async def start(self):
+        if self.started is not None:
+            return
+
+        loop = asyncio.get_running_loop()
+
+        class Server:
+            def connection_made(self, transport):
+                pass
+
+            def datagram_received(server, data, addr):
+                e = json.loads(data.decode())
+                logger.debug(f"message from mpv: {e}")
+                if "event" in e:
+                    if e["event"] == "file-loaded":
+                        self.state = MPV.State.READY
+                elif "request_id" in e and "error" in e:
+                    rid = e["request_id"]
+                    async def f():
+                        t = self.responses[rid]
+                        self.responses[rid] = e
+                        t.set()
+                    loop.call_soon_threadsafe(lambda: loop.create_task(f())) # TODO: is call_soon_threadsafe necessary?
+
+        self.ipc, w = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+        w.set_inheritable(True)
+        await loop.create_datagram_endpoint(lambda: Server(), sock=self.ipc)
+
+        mpv = os.environ.get("MPV", default="mpv")
+        args = [
+            "--pause",
+            "--no-terminal",
+            "--keep-open", "--keep-open-pause=no",
+            f"--input-ipc-client=fd://{w.fileno()}",
+            self.target
+        ]
+
+        logger.debug(f"running {mpv} {args}")
+        self.process = await asyncio.create_subprocess_exec(mpv, *args, close_fds=False)
+        w.close()
+        self.started = datetime.now()
+
+    async def stop(self):
+        if self.process is not None:
+            self.process.terminate()
+            await self.process.wait()
+            self.state = MPV.State.STOPPED
+            self.process = None
+
 class GUI:
     def __init__(self, args):
         self.running = True
         self.args = args
         self.recorder = Recorder()
+        self.player = Player()
 
         self.root = tk.Tk()
         self.root.title("audio-journal")
@@ -563,9 +707,10 @@ class GUI:
         self.sounds_view = ttk.Treeview(self.root, columns=("duration",), selectmode="browse")
         self.sounds_view.heading("duration", text="Duration")
         self.sounds_view.grid(row=0, column=0, columnspan=3, sticky=(tk.N, tk.S, tk.E, tk.W))
+        self.sounds_view.bind("<<TreeviewSelect>>", self.sound_selection)
 
-        self.sounds = set()
-        for s in sorted(load_sounds(args), key=lambda s: s.datetime):
+        self.sounds = load_sounds(args)
+        for s in sorted(self.sounds.values(), key=lambda s: s.datetime):
             self.insert_sound(s)
 
         self.status = ttk.Label(self.root, text='00:00:00.000', font="TkFixedFont", anchor="center", relief="sunken")
@@ -587,6 +732,10 @@ class GUI:
         self.root.rowconfigure(2, weight=1)
 
         self.root.bind("<Escape>", lambda e: self.stop())
+        self.root.bind("<space>", lambda e: self.play_pause_toggle())
+        self.sounds_view.bind("<Left>", lambda e: self.seek(relative=-5))
+        self.sounds_view.bind("<Right>", lambda e: self.seek(relative=5))
+        self.sounds_view.bind("<Home>", lambda e: self.seek(absolute=0))
 
         self.update_queue = queue.Queue()
         self.recorder.add_state_listener(self.generate_state_update_event)
@@ -633,16 +782,39 @@ class GUI:
             pass
 
     def insert_sound(self, s):
-        self.sounds.add(s)
-        self.sounds_view.insert("", "end", hash(s), text=s.title, values=(render_duration(round(s.length)),))
-        self.sounds_view.see(hash(s))
+        self.sounds[s.id] = s
+        self.sounds_view.insert("", "end", s.id, text=s.title, values=(render_duration(round(s.length)),))
+        self.sounds_view.see(s.id)
 
     def stop(self):
         self.recorder.remove_state_listener(self.generate_state_update_event)
         self.recorder.remove_sound_listener(self.generate_new_sound_event)
         self.recorder.stop()
+        self.player.stop()
         self.running = False
         self.root.destroy()
+
+    def play_pause_toggle(self):
+        s = self.sounds_view.selection()
+        if len(s) == 0:
+            self.player.pause()
+        elif len(s) == 1:
+            s = self.sounds[int(s[0])]
+            self.player.toggle(s)
+        else:
+            raise RuntimeError("unexpected amount of selected sounds")
+
+    def sound_selection(self, e):
+        s = self.sounds_view.selection()
+        if len(s) == 1:
+            self.player.load(self.sounds[int(s[0])])
+        else:
+            raise RuntimeError("unexpected amount of selected sounds")
+
+    def seek(self, **kwargs):
+        s = self.sounds_view.selection()
+        s = self.sounds[int(s[0])]
+        self.player.seek(s, **kwargs)
 
     def run(self):
         profile = resolve_profile(self.args, None)
@@ -656,6 +828,7 @@ class GUI:
         t.start()
         self.root.mainloop()
         t.join()
+        self.player.join()
 
 if __name__ == "__main__":
     args = parse_args()
