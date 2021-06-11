@@ -1,7 +1,8 @@
+LOG_LEVEL=${LOG_LEVEL-INFO}
 go() {
-    make -C ../trec build LOG_LEVEL=${1-INFO} && \
+    make -C ../trec build LOG_LEVEL=$LOG_LEVEL && \
         TREC=$(readlink -f ../trec/build/trec) \
-        ./audio-journal --log=${1-INFO} record
+        ./audio-journal --log=$LOG_LEVEL "$@"
 }
 
 toggle() {

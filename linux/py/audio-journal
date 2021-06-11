@@ -14,6 +14,7 @@ import pathlib
 import queue
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -231,6 +232,9 @@ class Profile:
                 composer = j.get("composer"),
                 prefix = j.get("prefix"))
 
+    def __repr__(self):
+        return f"Profile(prefix={self.prefix},filename={self.filename},bucket={self.bucket},local={self.local},title={self.title},artist={self.artist},composer={self.composer})"
+
 def resolve_profile(args, profile=None):
     d = pathlib.Path(args.config) / "profiles"
 
@@ -312,22 +316,20 @@ def compute_sha1_md5(fn):
             md5.update(bs)
         return (sha1.digest(), md5.digest())
 
-def postprocess(profile, wd, callback=None):
+def postprocess(profile, fn):
     b = None
     if profile.bucket is not None:
         b = s3.Bucket(profile.bucket)
         bl = s3_client.get_bucket_location(Bucket=b.name)["LocationConstraint"]
 
-    [fn] = pathlib.Path(wd.name).iterdir()
-
-    d = datetime.strptime(fn.name, profile.filename)
+    date = datetime.strptime(fn.name, profile.filename)
     af = eyed3.load(fn)
     af.tag = eyed3.id3.Tag()
-    af.tag.recording_date = d.date().isoformat()
+    af.tag.recording_date = date.date().isoformat()
     if profile.artist is not None:
         af.tag.artist = profile.artist
     if profile.title is not None:
-        af.tag.title = d.strftime(profile.title)
+        af.tag.title = date.strftime(profile.title)
     if profile.composer is not None:
         af.tag.composer = profile.composer
     af.tag.save()
@@ -355,7 +357,7 @@ def postprocess(profile, wd, callback=None):
             length = duration,
             url = url,
             sha1 = sha1.hex(),
-            datetime = d,
+            datetime = date,
             filename = fn.name,
             mimetype = mimetype)
 
@@ -398,88 +400,135 @@ def postprocess(profile, wd, callback=None):
         target = d / fn.name
         logger.debug(f"copying local sound file: {target}")
         shutil.copy(fn, target)
+        s.local = target
 
         target = d / f"{fn.stem}.json"
         logger.debug(f"writing local sound metadata: {target}")
         target.write_bytes(metadata)
 
     if logger.level <= logging.DEBUG:
-        logger.debug(f"successfully processed sound: filename={fn.name} date={d} sha1={sha1.hex()} md5={md5.hex()} length={duration} mimetype={mimetype} url={url}")
+        logger.debug(f"successfully processed sound: filename={s.filename} date={s.datetime} sha1={s.sha1} length={s.length} mimetype={s.mimetype} url={s.url} local={s.local}")
     else:
         logger.info(f"successfully processed: {s.title}")
 
-    if callback is not None:
-        callback(s)
+    return s
 
-class StateE(Enum):
-    UNDEFINED = 0
-    WAITING = 1
-    RECORDING = 2
-    SILENCE = 3
-    STOPPING = 4
+class Recorder:
+    class State(Enum):
+        NOT_RUNNING = 0
+        WAITING = 1
+        RECORDING = 2
+        SILENCE = 3
+        STOPPING = 4
 
-class RecordingStateUpdate:
-    def __init__(self, state, peak, rms):
-        self.state = state
-        self.peak = peak
-        self.rms = rms
+    class Update:
+        def __init__(self, state, peak, rms):
+            self.state = state
+            self.peak = peak
+            self.rms = rms
 
-async def record(profile, wd, handle_state_update=None):
-    r, w = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
-    w.set_inheritable(True)
+    def __init__(self):
+        self.state_listeners = set()
+        self.sound_listeners = set()
+        self.process = None
+        self.pps = set()
 
-    class Server:
-        def connection_made(self, transport):
-            self.transport = transport
+    def add_state_listener(self, f):
+        self.state_listeners += f
 
-        def datagram_received(self, data, addr):
-            state = StateE(data[0])
-            rms = int.from_bytes(data[1:2], byteorder=sys.byteorder)
-            peak = int.from_bytes(data[3:5], byteorder=sys.byteorder)
-            logger.debug(f"received monitoring data: state={state} rms={rms} peak={peak}")
-            u = RecordingStateUpdate(state=state, rms=rms, peak=peak)
-            handle_state_update(u)
+    def add_sound_listener(self, f):
+        self.sound_listeners += f
 
-    trec = os.environ.get("TREC", default="trec")
-    args = []
-    if handle_state_update is not None:
-        loop = asyncio.get_running_loop()
-        transport, protocol = await loop.create_datagram_endpoint(lambda: Server(), sock=r)
-        args.extend([ "-M", str(w.fileno()), "-m", str(10) ])
-    args.append(f"{wd.name}/{profile.filename}")
-    p = await asyncio.create_subprocess_exec(trec, *args, close_fds=False)
-    w.close()
-    ec = await p.wait()
-    if ec != 0:
-        raise RuntimeError(f"{trec} terminated with non-zero exit code: {ec}")
+    async def record(self, profile):
+        if self.process is not None:
+            raise NotImplementedError
 
-async def record_loop(profile, handle_state_update=None, sound_callback=None):
-    pps = set()
-    while True:
+        r, w = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+        w.set_inheritable(True)
+
+        class Server:
+            def connection_made(self, transport):
+                pass
+
+            def datagram_received(server, data, addr):
+                state = StateE(data[0])
+                rms = int.from_bytes(data[1:2], byteorder=sys.byteorder)
+                peak = int.from_bytes(data[3:5], byteorder=sys.byteorder)
+                logger.debug(f"received monitoring data: state={state} rms={rms} peak={peak}")
+                u = RecordingStateUpdate(state=state, rms=rms, peak=peak)
+                for f in self.state_listeners:
+                    f(u)
+
         wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
-        logger.debug(f"workdir: {wd.name}")
-        r = asyncio.create_task(record(profile, wd, handle_state_update))
-        pps.add(r)
-        while True:
-            done, pending = await asyncio.wait(pps)
-            pps -= done
-            if r in done:
-                pps.add(asyncio.create_task(asyncio.to_thread(postprocess, profile, wd, sound_callback)))
-                break
+        logger.debug(f"recording workdir: {wd.name}")
+
+        trec = os.environ.get("TREC", default="trec")
+        args = []
+        if len(self.state_listeners) > 0:
+            loop = asyncio.get_running_loop()
+            transport, protocol = await loop.create_datagram_endpoint(lambda: Server(), sock=r)
+            args.extend([ "-M", str(w.fileno()), "-m", str(10) ])
+        args.append(f"{wd.name}/{profile.filename}")
+        self.process = await asyncio.create_subprocess_exec(trec, *args, close_fds=False)
+        w.close()
+
+        ec = await self.process.wait()
+        if ec != 0:
+            raise RuntimeError(f"{trec} terminated with non-zero exit code: {ec}")
+        self.process = None
+
+        fs = list(pathlib.Path(wd.name).iterdir())
+        if len(fs) == 0:
+            return None
+        elif len(fs) == 1:
+            [fn] = fs
+        else:
+            raise RuntimeError(f"{trec} produced unexpected files")
+
+        def wrapper(wd):
+            with wd:
+                s = postprocess(profile, fn)
+                for f in self.sound_listeners:
+                    f(s)
+                return s
+        pp = asyncio.create_task(asyncio.to_thread(wrapper, wd))
+        self.pps.add(pp)
+        pp.add_done_callback(self.pps.remove)
+        return pp
+
+    async def wait(self):
+        if len(self.pps) > 0:
+            await asyncio.wait(self.pps)
+
+    def stop(self):
+        if self.process is not None:
+            self.process.terminate()
 
 def record_cmd(args):
     profile = resolve_profile(args, args.profile)
     logger.debug(f"recording using profile: {profile}")
 
-    async def oneshot():
-        wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
-        logger.debug(f"workdir: {wd.name}")
-        await record(profile, wd, None)
-        postprocess(profile, wd, None)
-
+    r = Recorder()
     if args.loop:
-        asyncio.run(record_loop(profile))
+        async def record_loop():
+            running = True
+            def stop():
+                nonlocal running
+                running = False
+                r.stop()
+            asyncio.get_running_loop().add_signal_handler(signal.SIGINT, stop)
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop)
+            while running:
+                await r.record(profile)
+            await r.wait()
+        asyncio.run(record_loop())
     else:
+        async def oneshot():
+            asyncio.get_running_loop().add_signal_handler(signal.SIGINT, r.stop)
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, r.stop)
+            pp = await r.record(profile)
+            if pp is not None:
+                await pp
         asyncio.run(oneshot())
 
 def gui(args):

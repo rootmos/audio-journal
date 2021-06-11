@@ -620,6 +620,7 @@ static void signalfd_init(struct state* st)
     sigset_t m;
     sigemptyset(&m);
     sigaddset(&m, SIGINT);
+    sigaddset(&m, SIGTERM);
 
     st->sfd = signalfd(-1, &m, SFD_NONBLOCK | SFD_CLOEXEC);
     CHECK(st->sfd, "signalfd");
@@ -650,6 +651,9 @@ static void signalfd_handle_event(struct state* st)
 
         if(si.ssi_signo == SIGINT) {
             debug("SIGINT");
+            st->state = STATE_STOPPING;
+        } else if(si.ssi_signo == SIGTERM) {
+            debug("SIGTERM");
             st->state = STATE_STOPPING;
         } else {
             warning("unhandled signal: %u", si.ssi_signo);
