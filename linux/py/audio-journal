@@ -640,11 +640,13 @@ class MPV:
     async def resume(self):
         await self.send_command("set_property", "pause", False)
 
-    async def seek(self, relative=None, absolute=None):
+    async def seek(self, relative=None, absolute=None, absolute_percent=None):
         if relative is not None:
             await self.send_command("seek", relative, "relative")
         if absolute is not None:
             await self.send_command("seek", absolute, "absolute")
+        if absolute_percent is not None:
+            await self.send_command("seek", absolute_percent, "absolute-percent")
 
     async def start(self):
         if self.started is not None:
@@ -702,7 +704,7 @@ class GUI:
         self.recorder = Recorder()
         self.player = Player()
 
-        self.root = tk.Tk()
+        self.root = tk.Tk(className="audio-journal")
         self.root.title("audio-journal")
 
         self.sounds_view = ttk.Treeview(self.root, columns=("duration",), selectmode="browse")
@@ -733,10 +735,12 @@ class GUI:
         self.root.rowconfigure(2, weight=1)
 
         self.root.bind("<Escape>", lambda e: self.stop())
+        self.root.bind("<q>", lambda e: self.stop())
         self.root.bind("<space>", lambda e: self.play_pause_toggle())
-        self.sounds_view.bind("<Left>", lambda e: self.seek(relative=-5))
-        self.sounds_view.bind("<Right>", lambda e: self.seek(relative=5))
-        self.sounds_view.bind("<Home>", lambda e: self.seek(absolute=0))
+        self.root.bind("<Left>", lambda e: self.seek(relative=-5))
+        self.root.bind("<Right>", lambda e: self.seek(relative=5))
+        self.root.bind("<Home>", lambda e: self.seek(absolute=0))
+        self.root.bind("<End>", lambda e: self.seek(absolute_percent=100))
         self.root.bind("<Prior>", lambda e: self.prior())
         self.root.bind("<Next>", lambda e: self.next())
 
