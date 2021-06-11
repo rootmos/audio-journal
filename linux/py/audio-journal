@@ -576,10 +576,12 @@ class Player:
 
     def load(self, sound):
         p = self._player(sound)
-        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.start()))
+        if p.started is None:
+            self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.start()))
 
     def toggle(self, sound):
         p = self._player(sound)
+        logger.debug("toggle")
         self.current = sound
         self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.toggle()))
 
@@ -602,18 +604,10 @@ class Player:
         self.thread.join()
 
 class MPV:
-    class State(Enum):
-        UNDEFINED = 0
-        READY = 1
-        PAUSED = 2
-        PLAYING = 3
-        STOPPED = 4
-
     def __init__(self, target):
         self.target = target
         self.started = None
         self.process = None
-        self.state = MPV.State.UNDEFINED
         self.ipc = None
         self.responses = {}
 
@@ -662,8 +656,7 @@ class MPV:
                 e = json.loads(data.decode())
                 logger.debug(f"message from mpv: {e}")
                 if "event" in e:
-                    if e["event"] == "file-loaded":
-                        self.state = MPV.State.READY
+                    pass
                 elif "request_id" in e and "error" in e:
                     rid = e["request_id"]
                     async def f():
@@ -694,7 +687,6 @@ class MPV:
         if self.process is not None:
             self.process.terminate()
             await self.process.wait()
-            self.state = MPV.State.STOPPED
             self.process = None
 
 class GUI:
@@ -710,7 +702,7 @@ class GUI:
         self.sounds_view = ttk.Treeview(self.root, columns=("duration",), selectmode="browse")
         self.sounds_view.heading("duration", text="Duration")
         self.sounds_view.grid(row=0, column=0, columnspan=3, sticky=(tk.N, tk.S, tk.E, tk.W))
-        self.sounds_view.bind("<<TreeviewSelect>>", self.sound_selection)
+        self.sounds_view.bind("<<TreeviewSelect>>", lambda e: self.sound_selection())
 
         self.sounds = load_sounds(args)
         for s in sorted(self.sounds.values(), key=lambda s: s.datetime):
@@ -738,6 +730,7 @@ class GUI:
         self.root.bind("<q>", lambda e: self.stop())
         self.root.protocol("WM_DELETE_WINDOW", self.stop)
         self.root.bind("<space>", lambda e: self.play_pause_toggle())
+        self.root.bind("<Double-Button-1>", lambda e: self.play_pause_toggle())
         self.root.bind("<Left>", lambda e: self.seek(relative=-5))
         self.root.bind("<Right>", lambda e: self.seek(relative=5))
         self.root.bind("<Home>", lambda e: self.seek(absolute=0))
@@ -812,12 +805,12 @@ class GUI:
         else:
             raise RuntimeError("unexpected amount of selected sounds")
 
-    def sound_selection(self, e):
+    def sound_selection(self):
         s = self.sounds_view.selection()
         if len(s) == 1:
-            if self.player.current is not None:
-                self.player.pause(self.player.current)
             s = self.sounds[int(s[0])]
+            if self.player.current is not None and s != self.player.current:
+                self.player.pause(self.player.current)
             self.player.load(s)
         else:
             raise RuntimeError("unexpected amount of selected sounds")
