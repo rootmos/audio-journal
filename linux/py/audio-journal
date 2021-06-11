@@ -736,6 +736,7 @@ class GUI:
 
         self.root.bind("<Escape>", lambda e: self.stop())
         self.root.bind("<q>", lambda e: self.stop())
+        self.root.protocol("WM_DELETE_WINDOW", self.stop)
         self.root.bind("<space>", lambda e: self.play_pause_toggle())
         self.root.bind("<Left>", lambda e: self.seek(relative=-5))
         self.root.bind("<Right>", lambda e: self.seek(relative=5))
