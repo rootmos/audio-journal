@@ -450,8 +450,14 @@ class Recorder:
     def add_state_listener(self, f):
         self.state_listeners.add(f)
 
+    def remove_state_listener(self, f):
+        self.state_listeners.remove(f)
+
     def add_sound_listener(self, f):
         self.sound_listeners.add(f)
+
+    def remove_sound_listener(self, f):
+        self.sound_listeners.remove(f)
 
     async def record(self, profile):
         if self.process is not None:
@@ -583,18 +589,16 @@ class GUI:
         self.root.bind("<Escape>", lambda e: self.stop())
 
         self.update_queue = queue.Queue()
-        def generate_state_update_event(update):
-            self.update_queue.put(update, block=False)
-            self.root.event_generate("<<RecordingStateUpdate>>")
-        self.recorder.add_state_listener(generate_state_update_event)
+        self.recorder.add_state_listener(self.generate_state_update_event)
         self.root.bind("<<RecordingStateUpdate>>", self.handle_recording_state_update);
 
         self.sound_queue = queue.Queue()
-        def generate_new_sound_event(s):
-            self.sound_queue.put(s)
-            self.root.event_generate("<<NewSound>>")
-        self.recorder.add_sound_listener(generate_new_sound_event)
+        self.recorder.add_sound_listener(self.generate_new_sound_event)
         self.root.bind("<<NewSound>>", self.handle_new_sounds);
+
+    def generate_state_update_event(self, update):
+        self.update_queue.put(update, block=False)
+        self.root.event_generate("<<RecordingStateUpdate>>")
 
     def handle_recording_state_update(self, *args):
         update = None
@@ -617,6 +621,10 @@ class GUI:
         s = float(update.captured_frames) / self.recorder.rate
         self.status["text"] = render_duration_numeric(s)
 
+    def generate_new_sound_event(self, s):
+        self.sound_queue.put(s)
+        self.root.event_generate("<<NewSound>>")
+
     def handle_new_sounds(self, *args):
         try:
             while True:
@@ -630,6 +638,8 @@ class GUI:
         self.sounds_view.see(hash(s))
 
     def stop(self):
+        self.recorder.remove_state_listener(self.generate_state_update_event)
+        self.recorder.remove_sound_listener(self.generate_new_sound_event)
         self.recorder.stop()
         self.running = False
         self.root.destroy()
