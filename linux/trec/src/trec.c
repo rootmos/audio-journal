@@ -164,7 +164,6 @@ struct state {
     usample_t threshold;
     usample_t global_peak;
     size_t silent_frames;
-    int silence_warning_issued;
 
     int mfd;
     int tfd;
@@ -719,28 +718,21 @@ int main(int argc, char* argv[])
         }
 
         if(st.state == STATE_RECORDING) {
-            if(st.silent_frames > 0) {
+            if(st.silent_frames >= st.grace_frames/2) {
                 st.state = STATE_RECORDING_SILENCE;
-                debug("silence detected");
+                info("silence detected: will stop in %.2f seconds",
+                     opts.graceperiod_seconds/2);
             }
         }
 
         if(st.state == STATE_RECORDING_SILENCE) {
             if(st.silent_frames == 0) {
                 st.state = STATE_RECORDING;
-                if(st.silence_warning_issued) {
-                    st.silence_warning_issued = 0;
-                    info("resuming");
-                }
+                info("resuming");
             } else if(st.silent_frames >= st.grace_frames) {
                 info("long silence detected");
                 st.state = STATE_STOPPING;
                 add_lead_out_frames(&st);
-            } else if(st.silent_frames >= st.grace_frames/2 &&
-                      !st.silence_warning_issued) {
-                info("silence detected: will stop in approximately %.2f seconds",
-                     opts.graceperiod_seconds/2);
-                st.silence_warning_issued = 1;
             }
         }
     }
