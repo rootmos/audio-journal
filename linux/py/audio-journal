@@ -47,6 +47,15 @@ def render_duration(secs):
         s += f"{secs}s"
     return s
 
+def render_duration_numeric(secs):
+    h = int(secs / 3600)
+    secs -= h * 3600
+    m = int(secs / 60)
+    secs -= m * 60
+    s = int(secs)
+    ms = int(1000*(secs - s))
+    return f"{h:02}:{m:02}:{s:02}.{ms:03}"
+
 logger = None
 def setup_logger(level):
     l = logging.getLogger("audio-journal")
@@ -425,12 +434,14 @@ class Recorder:
         STOPPING = 4
 
     class Update:
-        def __init__(self, state, peak, rms):
+        def __init__(self, state, captured_frames, peak, rms):
             self.state = state
+            self.captured_frames = captured_frames
             self.peak = peak
             self.rms = rms
 
-    def __init__(self):
+    def __init__(self, rate=44100):
+        self.rate = rate
         self.state_listeners = set()
         self.sound_listeners = set()
         self.process = None
@@ -455,9 +466,10 @@ class Recorder:
 
             def datagram_received(server, data, addr):
                 state = Recorder.State(data[0])
-                rms = int.from_bytes(data[1:2], byteorder=sys.byteorder)
-                peak = int.from_bytes(data[3:5], byteorder=sys.byteorder)
-                u = Recorder.Update(state=state, rms=rms, peak=peak)
+                captured_frames = int.from_bytes(data[1:9], byteorder=sys.byteorder)
+                rms = int.from_bytes(data[9:11], byteorder=sys.byteorder)
+                peak = int.from_bytes(data[11:13], byteorder=sys.byteorder)
+                u = Recorder.Update(state=state, captured_frames=captured_frames, rms=rms, peak=peak)
                 for f in self.state_listeners:
                     f(u)
 
@@ -465,7 +477,7 @@ class Recorder:
         logger.debug(f"recording workdir: {wd.name}")
 
         trec = os.environ.get("TREC", default="trec")
-        args = []
+        args = [ "-r", str(self.rate) ]
         if len(self.state_listeners) > 0:
             loop = asyncio.get_running_loop()
             transport, protocol = await loop.create_datagram_endpoint(lambda: Server(), sock=r)
@@ -601,6 +613,9 @@ class GUI:
             self.status["background"] = "red"
         elif update.state == Recorder.State.SILENCE:
             self.status["background"] = "dark red"
+
+        s = float(update.captured_frames) / self.recorder.rate
+        self.status["text"] = render_duration_numeric(s)
 
     def handle_new_sounds(self, *args):
         try:

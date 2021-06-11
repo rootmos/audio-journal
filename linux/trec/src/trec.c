@@ -42,6 +42,7 @@ static void print_usage(int fd, const char* prog)
     dprintf(fd, "  -L SEC      add SEC of sound leading out from silence threshold trigger\n");
     dprintf(fd, "  -B SEC      buffer SEC seconds of sound\n");
     dprintf(fd, "  -t PERCENT  consider a sample value below PERCENT percent of maximum as noise/silence\n");
+    dprintf(fd, "  -r HZ       sampling frequency\n");
 }
 
 void parse_opts(struct options* opts, int argc, char* argv[])
@@ -64,7 +65,7 @@ void parse_opts(struct options* opts, int argc, char* argv[])
     opts->monitor_fd = -1;
 
     int res;
-    while((res = getopt(argc, argv, "B:l:L:m:M:s:t:h")) != -1) {
+    while((res = getopt(argc, argv, "B:l:L:m:M:s:t:r:h")) != -1) {
         switch(res) {
         case 'B':
             res = sscanf(optarg, "%f", &opts->buffer_seconds);
@@ -116,6 +117,13 @@ void parse_opts(struct options* opts, int argc, char* argv[])
                 exit(1);
             }
             break;
+        case 'r':
+            res = sscanf(optarg, "%u", &opts->rate);
+            if(res != 1) {
+                dprintf(2, "unable to parse sampling frequency: %s\n", optarg);
+                exit(1);
+            }
+            break;
         case 'h':
         default:
             print_usage(res == 'h' ? 1 : 2, argv[0]);
@@ -157,6 +165,8 @@ struct state {
 
     void* buf;
     size_t f, fi, fe, fj, fn, r;
+
+    uint64_t captured_frames;
 
     size_t lead_in_frames;
     size_t lead_out_frames;
@@ -289,16 +299,24 @@ static void monitor_tick(struct state* st)
           100.0*rms/SAMPLE_MAX, 100.0*peak/SAMPLE_MAX);
 
     if(st->mfd >= 0) {
-        char buf[1+sizeof(usample_t)+sizeof(usample_t)];
-        buf[0] = st->state;
-        memcpy(&buf[1], &rms, sizeof(rms));
-        memcpy(&buf[1+sizeof(rms)], &peak, sizeof(peak));
-        ssize_t s = send(st->mfd, buf, sizeof(buf), 0);
+        struct __attribute__((__packed__)) {
+            unsigned char state;
+            uint64_t captured_frames;
+            usample_t rms;
+            usample_t peak;
+        } msg = {
+            .state = st->state,
+            .captured_frames = st->captured_frames,
+            .rms = rms,
+            .peak = peak,
+        };
+
+        ssize_t s = send(st->mfd, &msg, sizeof(msg), 0);
         if(s == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             warning("dropped monitoring message");
         } else {
             CHECK(s, "send");
-            if(s != sizeof(buf)) {
+            if(s != sizeof(msg)) {
                 failwith("unexpected partial write");
             }
         }
@@ -410,6 +428,7 @@ static void alsa_init(struct state* st, const struct options* opts)
     size_t n = st->f * st->fn;
     st->buf = malloc(n); CHECK_MALLOC(st->buf);
     st->fi = st->fe = st->fj = st->r = 0;
+    st->captured_frames = 0;
 }
 
 static void alsa_deinit(struct state* st)
@@ -444,6 +463,10 @@ static void alsa_handle_read(struct state* st)
             break;
         }
         CHECK_ALSA(s, "snd_pcm_readi");
+
+        if(st->state != STATE_WAITING) {
+            st->captured_frames += s;
+        }
         trace("captured %ld frames (out of %zu)", s, n);
 
         sample_t* samples = buf;
