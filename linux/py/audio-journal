@@ -580,6 +580,7 @@ class Player:
 
     def toggle(self, sound):
         p = self._player(sound)
+        self.current = sound
         self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.toggle()))
 
     def pause(self, sound):
@@ -736,6 +737,8 @@ class GUI:
         self.sounds_view.bind("<Left>", lambda e: self.seek(relative=-5))
         self.sounds_view.bind("<Right>", lambda e: self.seek(relative=5))
         self.sounds_view.bind("<Home>", lambda e: self.seek(absolute=0))
+        self.root.bind("<Prior>", lambda e: self.prior())
+        self.root.bind("<Next>", lambda e: self.next())
 
         self.update_queue = queue.Queue()
         self.recorder.add_state_listener(self.generate_state_update_event)
@@ -807,14 +810,62 @@ class GUI:
     def sound_selection(self, e):
         s = self.sounds_view.selection()
         if len(s) == 1:
-            self.player.load(self.sounds[int(s[0])])
+            if self.player.current is not None:
+                self.player.pause(self.player.current)
+            s = self.sounds[int(s[0])]
+            self.player.load(s)
+        else:
+            raise RuntimeError("unexpected amount of selected sounds")
+
+    def prior(self):
+        s = self.sounds_view.selection()
+        if len(s) == 0:
+            last = None
+            index = 0
+            for s in self.sounds.keys():
+                i = self.sounds_view.index(s)
+                if i > index:
+                    index = i
+                    last = s
+            self.sounds_view.selection_set(last)
+            self.sounds_view.see(last)
+        elif len(s) == 1:
+            prev = self.sounds_view.prev(s[0])
+            if prev == "":
+                return
+            self.sounds_view.selection_set(prev)
+            self.sounds_view.see(prev)
+        else:
+            raise RuntimeError("unexpected amount of selected sounds")
+
+    def next(self):
+        s = self.sounds_view.selection()
+        if len(s) == 0:
+            first = None
+            index = sys.maxsize
+            for s in self.sounds.keys():
+                i = self.sounds_view.index(s)
+                if i < index:
+                    index = i
+                    first = s
+            self.sounds_view.selection_set(first)
+            self.sounds_view.see(first)
+        elif len(s) == 1:
+            next_ = self.sounds_view.next(s[0])
+            if next_ == "":
+                return
+            self.sounds_view.selection_set(next_)
+            self.sounds_view.see(next_)
         else:
             raise RuntimeError("unexpected amount of selected sounds")
 
     def seek(self, **kwargs):
         s = self.sounds_view.selection()
-        s = self.sounds[int(s[0])]
-        self.player.seek(s, **kwargs)
+        if len(s) == 1:
+            s = self.sounds[int(s[0])]
+            self.player.seek(s, **kwargs)
+        else:
+            raise RuntimeError("unexpected amount of selected sounds")
 
     def run(self):
         profile = resolve_profile(self.args, None)
