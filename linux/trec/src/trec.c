@@ -171,7 +171,7 @@ struct state {
     struct timespec monitor_period;
     sample_t* mbuf;
     size_t mi, mn;
-    usample_t peak; size_t peak_frames;
+    size_t peak_frames;
     uint64_t sqs; size_t rms_frames;
 };
 
@@ -230,7 +230,6 @@ static void monitor_init(struct state* st, const struct options* opts)
     st->mn = MAX(st->peak_frames, st->rms_frames);
     st->mi = 0;
     st->mbuf = calloc(st->mn, st->f); CHECK_MALLOC(st->mbuf);
-    st->peak = 0;
     st->sqs = 0;
 }
 
@@ -272,14 +271,29 @@ static void monitor_tick(struct state* st)
     }
 
     usample_t rms = round(sqrtf((float)st->sqs/(st->rms_frames*st->channels)));
+
+    usample_t peak = 0;
+    for(size_t n = 0, i = st->mi; n < st->peak_frames; n++, i--) {
+        for(size_t j = 0; j < st->channels; j++) {
+            sample_t s = st->mbuf[i*st->channels + j];
+            usample_t abs = s >= 0 ? s : -s;
+            if(abs > peak) {
+                peak = abs;
+            }
+        }
+        if(i == 0) {
+            i = st->mn;
+        }
+    }
+
     trace("RMS%%=%.2f peak%%=%.2f",
-          100.0*rms/SAMPLE_MAX, 100.0*st->peak/SAMPLE_MAX);
+          100.0*rms/SAMPLE_MAX, 100.0*peak/SAMPLE_MAX);
 
     if(st->mfd >= 0) {
         char buf[1+sizeof(usample_t)+sizeof(usample_t)];
         buf[0] = st->state;
         memcpy(&buf[1], &rms, sizeof(rms));
-        memcpy(&buf[1+sizeof(rms)], &st->peak, sizeof(st->peak));
+        memcpy(&buf[1+sizeof(rms)], &peak, sizeof(peak));
         ssize_t s = send(st->mfd, buf, sizeof(buf), 0);
         if(s == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             warning("dropped monitoring message");
@@ -294,7 +308,6 @@ static void monitor_tick(struct state* st)
 
 static void monitor_handle_new_frames(struct state* st,
                                       const sample_t* samples,
-                                      size_t f0,
                                       snd_pcm_uframes_t n)
 {
     for(size_t i = 0; i < n * st->channels; i++) {
@@ -304,27 +317,6 @@ static void monitor_handle_new_frames(struct state* st,
         usample_t abs = s >= 0 ? s : -s;
         if(abs > st->global_peak) {
             st->global_peak = abs;
-        }
-    }
-
-    // silent frames: TODO move this to alsa_handle_read
-    for(size_t i = 0; i < n; i++) {
-        int silent = 1;
-        for(size_t j = 0; j < st->channels; j++) {
-            sample_t s = samples[i*st->channels+j];
-            if((s >= 0 && s > st->threshold)
-               || (s < 0 && -s > st->threshold)) {
-                silent = st->silent_frames = 0;
-                break;
-            }
-        }
-        if(silent) {
-            st->silent_frames += 1;
-        } else {
-            st->fe = f0 + i;
-            if(st->fe == st->fn) {
-                st->fe = 0;
-            }
         }
     }
 
@@ -344,42 +336,6 @@ static void monitor_handle_new_frames(struct state* st,
                     t = st->mbuf[(st->mn-(st->rms_frames-st->mi))*st->channels + j];
                 }
                 st->sqs -= t*t;
-            }
-
-            // running peak (TODO: divide and conquer aggregates)
-            {
-                usample_t abs = s >= 0 ? s : -s;
-                if(abs > st->peak) {
-                    st->peak = abs;
-                } else {
-                    size_t k;
-                    if(st->peak_frames <= st->mi) {
-                        k = (st->mi-st->peak_frames)*st->channels + j;
-                    } else {
-                        k = (st->mn-(st->peak_frames-st->mi))*st->channels + j;
-                    }
-                    sample_t t = st->mbuf[k];
-                    abs = t >= 0 ? t : -t;
-                    if(abs == st->peak && st->peak > 0) {
-                        usample_t peak = 0;
-                        size_t l = st->mi*st->channels + j;
-                        while(1) {
-                            k += 1;
-                            if(k == st->mn*st->channels) {
-                                k = 0;
-                            }
-                            if(k == l) {
-                                break;
-                            }
-                            t = st->mbuf[k];
-                            abs = t >= 0 ? t : -t;
-                            if(abs > peak) {
-                                peak = abs;
-                            }
-                        }
-                        st->peak = peak;
-                    }
-                }
             }
 
             *m = s;
@@ -489,9 +445,30 @@ static void alsa_handle_read(struct state* st)
             break;
         }
         CHECK_ALSA(s, "snd_pcm_readi");
-
         trace("captured %ld frames (out of %zu)", s, n);
-        monitor_handle_new_frames(st, buf, st->fj, s);
+
+        sample_t* samples = buf;
+        for(size_t i = 0; i < s; i++) {
+            int silent = 1;
+            for(size_t j = 0; j < st->channels; j++) {
+                sample_t t = samples[i*st->channels+j];
+                if((t >= 0 && t > st->threshold)
+                   || (t < 0 && -t > st->threshold)) {
+                    silent = st->silent_frames = 0;
+                    break;
+                }
+            }
+            if(silent) {
+                st->silent_frames += 1;
+            } else {
+                st->fe = st->fj + i;
+                if(st->fe == st->fn) {
+                    st->fe = 0;
+                }
+            }
+        }
+
+        monitor_handle_new_frames(st, buf, s);
 
         st->fj += s;
         if(st->fj == st->fn) {
