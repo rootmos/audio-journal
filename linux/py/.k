@@ -6,7 +6,5 @@ go() {
 }
 
 toggle() {
-    while sleep 2; do
-        pactl set-source-mute alsa_input.usb-Burr-Brown_from_TI_USB_Audio_CODEC-00.analog-stereo toggle
-    done
+    pactl set-source-mute alsa_input.usb-Burr-Brown_from_TI_USB_Audio_CODEC-00.analog-stereo toggle
 }
