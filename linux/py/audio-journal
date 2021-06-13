@@ -421,7 +421,7 @@ def postprocess(profile, fn):
     bucket = None
     if profile.bucket is not None:
         bucket = s3.Bucket(profile.bucket)
-        bucket_location = s3_client.get_bucket_location(Bucket=b.name)["LocationConstraint"]
+        bucket_location = s3_client.get_bucket_location(Bucket=bucket.name)["LocationConstraint"]
 
     date = datetime.strptime(fn.name, profile.filename)
     af = eyed3.load(fn)
@@ -530,12 +530,17 @@ class Recorder:
             self.peak = peak
             self.rms = rms
 
-    def __init__(self, rate=44100):
+    def __init__(self, profile, rate=44100):
         self.rate = rate
         self.state_listeners = set()
         self.sound_listeners = set()
         self.process = None
         self.pps = set()
+
+        self.recording_loop_running = None
+        self.loop = None
+        self.thread = None
+        self._profile = profile
 
     def add_state_listener(self, f):
         self.state_listeners.add(f)
@@ -581,7 +586,8 @@ class Recorder:
             args.extend([ "-M", str(w.fileno()), "-m", str(10) ])
         args.append(f"{wd.name}/{profile.filename}")
         self.process = await asyncio.create_subprocess_exec(trec, *args, close_fds=False)
-        w.close()
+        if len(self.state_listeners) > 0:
+            w.close()
 
         ec = await self.process.wait()
         if ec != 0:
@@ -612,12 +618,46 @@ class Recorder:
             await asyncio.wait(self.pps)
 
     def stop(self):
+        if self.thread is not None:
+            def f():
+                self.recording_loop_running = False
+            self.loop.call_soon_threadsafe(f)
         if self.process is not None:
             self.process.terminate()
 
+    def start(self):
+        async def record_loop():
+            while self.recording_loop_running:
+                await self.record(self.profile)
+            await self.wait()
+
+        self.loop = asyncio.new_event_loop()
+        self.recording_loop_running = True
+        self.thread = threading.Thread(target=lambda: self.loop.run_until_complete(record_loop()))
+        self.thread.start()
+
+    @property
+    def profile(self):
+        return self._profile
+
+    @profile.setter
+    def profile(self, p):
+        if self._profile == p:
+            return
+        self._profile = p
+
+        if self.process is not None:
+            self.process.terminate()
+
+        logger.debug(f"switching recording profile: {p}")
+
+    def join(self):
+        if self.thread is not None:
+            self.thread.join()
+
 def record_cmd(args):
     profile = resolve_profile(args, args.profile)
-    r = Recorder()
+    r = Recorder(profile)
     if args.loop:
         async def record_loop():
             running = True
@@ -628,14 +668,14 @@ def record_cmd(args):
             asyncio.get_running_loop().add_signal_handler(signal.SIGINT, stop)
             asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop)
             while running:
-                await r.record(profile)
+                await r.record()
             await r.wait()
         asyncio.run(record_loop())
     else:
         async def oneshot():
             asyncio.get_running_loop().add_signal_handler(signal.SIGINT, r.stop)
             asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, r.stop)
-            pp = await r.record(profile)
+            pp = await r.record()
             if pp is not None:
                 await pp
         asyncio.run(oneshot())
@@ -781,7 +821,6 @@ class GUI:
     def __init__(self, args):
         self.running = True
         self.args = args
-        self.recorder = Recorder()
         self.player = Player()
         self._profile = None
         self.sounds = {}
@@ -814,7 +853,6 @@ class GUI:
         self.rms = ttk.Progressbar(self.root, orient=tk.HORIZONTAL, mode="determinate", maximum=32767)
         self.rms.grid(row=2, column=1, sticky=(tk.N, tk.S, tk.E, tk.W))
 
-
         self.root.columnconfigure(0, weight=1)
         self.root.columnconfigure(1, weight=5)
         self.root.columnconfigure(2, weight=2)
@@ -833,6 +871,8 @@ class GUI:
         self.root.bind("<End>", lambda e: self.seek(absolute_percent=100))
         self.root.bind("<Prior>", lambda e: self.prior())
         self.root.bind("<Next>", lambda e: self.next())
+
+        self.recorder = Recorder(self.profile)
 
         self.update_queue = queue.Queue()
         self.recorder.add_state_listener(self.generate_state_update_event)
@@ -888,7 +928,6 @@ class GUI:
         self.recorder.remove_sound_listener(self.generate_new_sound_event)
         self.recorder.stop()
         self.player.stop()
-        self.running = False
         self.root.destroy()
 
     def handle_double_click(self):
@@ -969,31 +1008,25 @@ class GUI:
 
     def handle_profile_select(self):
         [i] = self.profiles_view.curselection()
-        self.profile = self.profiles[i]
+        self.recorder.profile = self.profile = self.profiles[i]
 
     @property
     def profile(self):
         return self._profile
 
     @profile.setter
-    def profile(self, profile):
-        logger.debug(f"selecting profile: {profile}")
-        self._profile = profile
+    def profile(self, p):
+        logger.debug(f"selecting profile: {p}")
+        self._profile = p
         self.sounds_view.delete(*self.sounds.keys())
-        self.sounds = load_sounds(args, profile)
+        self.sounds = load_sounds(args, p)
         for s in sorted(self.sounds.values(), key=lambda s: s.datetime):
             self.insert_sound(s)
 
     def run(self):
-        async def record_loop():
-            while self.running:
-                await self.recorder.record(self.profile)
-            await self.recorder.wait()
-
-        t = threading.Thread(target=lambda: asyncio.run(record_loop()))
-        t.start()
+        self.recorder.start()
         self.root.mainloop()
-        t.join()
+        self.recorder.join()
         self.player.join()
 
 if __name__ == "__main__":
