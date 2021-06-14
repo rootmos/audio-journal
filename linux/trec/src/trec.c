@@ -65,8 +65,11 @@ void parse_opts(struct options* opts, int argc, char* argv[])
     opts->monitor_fd = -1;
 
     int res;
-    while((res = getopt(argc, argv, "B:l:L:m:M:s:t:r:h")) != -1) {
+    while((res = getopt(argc, argv, "d:B:l:L:m:M:s:t:r:h")) != -1) {
         switch(res) {
+        case 'd':
+            opts->device = strdup(optarg);
+            break;
         case 'B':
             res = sscanf(optarg, "%f", &opts->buffer_seconds);
             if(res != 1 || opts->buffer_seconds < 0.0) {
