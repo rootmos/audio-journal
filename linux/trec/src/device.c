@@ -1,20 +1,75 @@
 #include <pulse/pulseaudio.h>
-#include <string.h>
+#include <regex.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <r.h>
 
 struct state {
-    char choice[128];
+    uint32_t choice;
+
     pa_mainloop_api* m;
+
+    int invert_match;
+    regex_t* pattern;
+    size_t patterns;
 };
+
+static void print_usage(int fd, const char* prog)
+{
+    dprintf(fd, "usage: %s [OPTION]... [PATTERN]...\n", prog);
+    dprintf(fd, "\n");
+    dprintf(fd, "options:\n");
+    dprintf(fd, "  -v invert match\n");
+    dprintf(fd, "  -i ignore case\n");
+    dprintf(fd, "  -E extended regex\n");
+}
+
+static void parse_opts(struct state* st, int argc, char* argv[])
+{
+    int regex_flags = REG_NOSUB;
+
+    int res;
+    while((res = getopt(argc, argv, "viEh")) != -1) {
+        switch(res) {
+        case 'v':
+            st->invert_match = 1;
+            break;
+        case 'i':
+            regex_flags |= REG_ICASE;
+            break;
+        case 'E':
+            regex_flags |= REG_EXTENDED;
+            break;
+        case 'h':
+        default:
+            print_usage(res == 'h' ? 1 : 2, argv[0]);
+            exit(res == 'h' ? 0 : 1);
+        }
+    }
+
+    st->patterns = argc - optind;
+    st->pattern = calloc(st->patterns, sizeof(*st->pattern));
+    CHECK_MALLOC(st->pattern);
+    for(size_t i = 0; i < st->patterns; i++) {
+        char* p = argv[optind + i];
+        debug("compiling pattern: %s", p);
+        int r = regcomp(&st->pattern[i], p, regex_flags);
+        if(r != 0) {
+            char buf[1024];
+            regerror(r, NULL, LIT(buf));
+            dprintf(2, "unable to compile pattern: %s (%s)\n", p, buf);
+            exit(1);
+        }
+    }
+}
 
 static void signal_callback(pa_mainloop_api* m,
                             pa_signal_event* e,
                             int sig, void* opaque)
 {
     debug("signal %s (%d)", strsignal(sig), sig);
-    m->quit(m, 0);
+    m->quit(m, 1);
 }
 
 static void source_info_callback(pa_context* c,
@@ -29,22 +84,59 @@ static void source_info_callback(pa_context* c,
     }
 
     debug("source: name=%s index=%"PRIu32, i->name, i->index);
+    struct state* st = opaque;
 
-    const char* key = NULL; void* j = NULL;
-    while(1) {
-        key = pa_proplist_iterate(i->proplist, &j);
-        if(key == NULL) {
-            break;
-        }
-
-        const void* data; size_t n;
-        pa_proplist_get(i->proplist, key, &data, &n);
-
-        debug("prop: %s=%s", key, (char*)data);
+    if(st->choice != PA_INVALID_INDEX) {
+        return;
     }
 
-    struct state* st = opaque;
-    sprintf(st->choice, "pulse:%"PRIu32, i->index);
+    if(st->patterns > 0) {
+        const char* key = NULL; void* j = NULL;
+        while(1) {
+            key = pa_proplist_iterate(i->proplist, &j);
+            if(key == NULL) {
+                break;
+            }
+
+            const void* data; size_t n;
+            pa_proplist_get(i->proplist, key, &data, &n);
+
+            if(0 == strcmp(key, PA_PROP_DEVICE_DESCRIPTION)
+               || 0 == strcmp(key, PA_PROP_DEVICE_PRODUCT_NAME)
+               || 0 == strcmp(key, PA_PROP_DEVICE_VENDOR_NAME)
+               ) {
+                trace("checking property: %s=%s", key, (char*)data);
+                for(size_t j = 0; j < st->patterns; j++) {
+                    int r = regexec(&st->pattern[j], (const char*)data,
+                                    0, NULL, 0);
+                    trace("pattren j=%zu r=%d", j, r);
+                    if(r == 0) {
+                        if(st->invert_match) {
+                            debug("matched property (skipping stream): %s=%s",
+                                  key, (char*)data);
+                            return;
+                        } else {
+                            debug("matched property: %s=%s", key, (char*)data);
+                            goto choose;
+                        }
+                    }
+                }
+
+            } else {
+                trace("skipping property: %s", key);
+            }
+        }
+
+        if(st->invert_match) {
+            goto choose;
+        } else {
+            return;
+        }
+    }
+
+choose:
+    st->choice = i->index;
+    debug("chosing stream: %"PRIu32, st->choice);
     st->m->quit(st->m, 0);
 }
 
@@ -95,11 +187,12 @@ static void context_state_callback(pa_context* c,
 
 int main(int argc, char* argv[])
 {
+    struct state st = { 0 };
+    st.choice = PA_INVALID_INDEX;
+    parse_opts(&st, argc, argv);
+
     pa_mainloop* l = pa_mainloop_new();
     CHECK_NOT(l, NULL, "pa_mainloop_new");
-
-    struct state st;
-    memset(&st, 0, sizeof(st));
     st.m = pa_mainloop_get_api(l);
 
     const char* client_name = argv[0];
@@ -122,8 +215,8 @@ int main(int argc, char* argv[])
     pa_signal_done();
     pa_mainloop_free(l);
 
-    if(st.choice) {
-        printf("%s\n", st.choice);
+    if(st.choice != PA_INVALID_INDEX) {
+        printf("pulse:%"PRIu32"\n", st.choice);
     }
 
     return ec;

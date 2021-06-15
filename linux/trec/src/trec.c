@@ -45,7 +45,7 @@ static void print_usage(int fd, const char* prog)
     dprintf(fd, "  -r HZ       sampling frequency\n");
 }
 
-void parse_opts(struct options* opts, int argc, char* argv[])
+static void parse_opts(struct options* opts, int argc, char* argv[])
 {
     opts->lame = "lame";
     opts->device = "default";
