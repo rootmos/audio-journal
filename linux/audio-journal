@@ -232,7 +232,7 @@ class Sound:
 
 
 class Profile:
-    def __init__(self, name, filename, bucket, local, title, artist, composer, prefix, allow_uploads):
+    def __init__(self, name, filename, bucket, local, title, artist, composer, prefix, allow_uploads, record):
         self.name = name
         self.filename = filename
         self.bucket = bucket
@@ -242,6 +242,7 @@ class Profile:
         self.composer = composer
         self.prefix = prefix
         self.allow_uploads = allow_uploads
+        self.record = record
 
     def default():
         return Profile(
@@ -253,9 +254,14 @@ class Profile:
                 artist = None,
                 composer = None,
                 prefix = None,
-                allow_uploads = None)
+                allow_uploads = None,
+                record = None)
 
     def from_json(j, fallback_name):
+        record = j.get("record")
+        if record is not None:
+            record = Recorder.Settings.from_json(record)
+
         return Profile(
                 name = j.get("name", fallback_name),
                 filename = j["filename"],
@@ -265,7 +271,8 @@ class Profile:
                 artist = j.get("artist"),
                 composer = j.get("composer"),
                 prefix = j.get("prefix"),
-                allow_uploads = j.get("allow_uploads", True))
+                allow_uploads = j.get("allow_uploads", True),
+                record = record)
 
     def __repr__(self):
         s = "Profile("
@@ -516,6 +523,60 @@ def postprocess(profile, fn):
     return s
 
 class Recorder:
+    class Settings:
+        def __init__(self, rate, devices, invert_match, ignore_case, extended_regex, post_connect_cooloff):
+            self.rate = rate
+            self.devices = devices
+            self.invert_match = invert_match
+            self.ignore_case = ignore_case
+            self.extended_regex = extended_regex
+            self.post_connect_cooloff = post_connect_cooloff
+
+        def merge(self, override):
+            return Recorder.Settings(
+                rate = override.rate if override.rate is not None else self.rate,
+                devices = override.devices if override.devices is not None else self.devices,
+                invert_match = override.invert_match if override.invert_match is not None else self.invert_match,
+                ignore_case = override.ignore_case if override.ignore_case is not None else self.ignore_case,
+                extended_regex = override.extended_regex if override.extended_regex is not None else self.extended_regex,
+                post_connect_cooloff = override.post_connect_cooloff if override.post_connect_cooloff is not None else self.post_connect_cooloff,
+            )
+
+        def default(args):
+            d = Recorder.Settings(
+                rate = 44100,
+                devices = None,
+                invert_match = False,
+                ignore_case = False,
+                extended_regex = False,
+                post_connect_cooloff = None,
+            )
+            p = pathlib.Path(args.config) / "record.json"
+            if p.exists():
+                d = d.merge(Recorder.Settings.from_json(json.loads(p.read_text())))
+            return d
+
+        def from_json(j):
+            return Recorder.Settings(
+                rate = j.get("rate"),
+                devices = j.get("devices"),
+                invert_match = j.get("invert_match"),
+                ignore_case = j.get("ignore_case"),
+                extended_regex = j.get("extended_regex"),
+                post_connect_cooloff = j.get("post_connect_cooloff"),
+            )
+
+        def __repr__(self):
+            s = "Recorder.Settings("
+            s += f"rate={self.rate},"
+            s += f"devices={self.devices},"
+            s += f"invert_match={self.invert_match},"
+            s += f"ignore_case={self.ignore_case},"
+            s += f"extended_regex={self.extended_regex},"
+            s += f"post_connect_cooloff={self.post_connect_cooloff}"
+            s += ")"
+            return s
+
     class State(Enum):
         NOT_RUNNING = 0
         WAITING = 1
@@ -524,14 +585,15 @@ class Recorder:
         STOPPING = 4
 
     class Update:
-        def __init__(self, state, captured_frames, peak, rms):
+        def __init__(self, state, captured_frames, rate, peak, rms):
             self.state = state
             self.captured_frames = captured_frames
+            self.rate = rate
             self.peak = peak
             self.rms = rms
 
-    def __init__(self, profile, rate=44100):
-        self.rate = rate
+    def __init__(self, profile, settings):
+        self.settings = settings
         self.state_listeners = set()
         self.sound_listeners = set()
         self.process = None
@@ -554,16 +616,60 @@ class Recorder:
     def remove_sound_listener(self, f):
         self.sound_listeners.remove(f)
 
-    async def record(self, profile):
+    async def wait_for_device(self, settings):
         if self.process is not None:
             raise NotImplementedError
-        logger.debug(f"recording using profile: {profile}")
+        device_exe = os.environ.get("AUDIO_JOURNAL_DEVICE", default="audio-journal-device")
+        args = []
+
+        if settings.invert_match:
+            args.append("-v")
+
+        if settings.ignore_case:
+            args.append("-i")
+
+        if settings.extended_regex:
+            args.append("-E")
+
+        args += settings.devices
+        if logger.level <= logging.DEBUG:
+            logger.debug(f"running device: {device_exe} {args}")
+        else:
+            logger.debug(f"waiting for devices: {settings.device}")
+
+        self.process = await asyncio.create_subprocess_exec(device_exe, *args, stdout=subprocess.PIPE)
+        (stdout, _) = await self.process.communicate()
+        self.process = None
+        ls = stdout.splitlines()
+        if len(ls) == 0:
+            logger.debug("no devices returned")
+            return None
+        else:
+            if settings.post_connect_cooloff is not None:
+                await asyncio.sleep(settings.post_connect_cooloff)
+            return str(ls[0], "UTF-8")
+
+    async def record(self):
+        if self.process is not None:
+            raise NotImplementedError
+        logger.debug(f"recording using profile: {self.profile}")
+
+        settings = self.settings
+        if self.profile.record is not None:
+            settings = settings.merge(self.profile.record)
+        logger.debug(f"recording using settings: {settings}")
+
+        args = [ "-r", str(settings.rate) ]
+        if settings.devices:
+            device = await self.wait_for_device(settings)
+            if device is None:
+                return
+            args.extend([ "-d", device ])
 
         wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
         logger.debug(f"recording workdir: {wd.name}")
 
-        rec = os.environ.get("AUDIO_JOURNAL_REC", default="audio-journal-trec")
-        args = [ "-r", str(self.rate) ]
+        rec = os.environ.get("AUDIO_JOURNAL_REC", default="audio-journal-rec")
         if len(self.state_listeners) > 0:
             class Server:
                 def connection_made(self, transport):
@@ -574,7 +680,7 @@ class Recorder:
                     captured_frames = int.from_bytes(data[1:9], byteorder=sys.byteorder)
                     rms = int.from_bytes(data[9:11], byteorder=sys.byteorder)
                     peak = int.from_bytes(data[11:13], byteorder=sys.byteorder)
-                    u = Recorder.Update(state=state, captured_frames=captured_frames, rms=rms, peak=peak)
+                    u = Recorder.Update(state=state, captured_frames=captured_frames, rate=settings.rate, rms=rms, peak=peak)
                     for f in self.state_listeners:
                         f(u)
 
@@ -584,14 +690,15 @@ class Recorder:
             loop = asyncio.get_running_loop()
             transport, protocol = await loop.create_datagram_endpoint(lambda: Server(), sock=r)
             args.extend([ "-M", str(w.fileno()), "-m", str(10) ])
-        args.append(f"{wd.name}/{profile.filename}")
-        self.process = await asyncio.create_subprocess_exec(trec, *args, close_fds=False)
+
+        args.append(f"{wd.name}/{self.profile.filename}")
+        self.process = await asyncio.create_subprocess_exec(rec, *args, close_fds=False)
         if len(self.state_listeners) > 0:
             w.close()
 
         ec = await self.process.wait()
         if ec != 0:
-            raise RuntimeError(f"{trec} terminated with non-zero exit code: {ec}")
+            raise RuntimeError(f"{rec} terminated with non-zero exit code: {ec}")
         self.process = None
 
         fs = list(pathlib.Path(wd.name).iterdir())
@@ -600,11 +707,11 @@ class Recorder:
         elif len(fs) == 1:
             [fn] = fs
         else:
-            raise RuntimeError(f"{trec} produced unexpected files")
+            raise RuntimeError(f"{rec} produced unexpected files")
 
         def wrapper(wd):
             with wd:
-                s = postprocess(profile, fn)
+                s = postprocess(self.profile, fn)
                 for f in self.sound_listeners:
                     f(s)
                 return s
@@ -628,7 +735,7 @@ class Recorder:
     def start(self):
         async def record_loop():
             while self.recording_loop_running:
-                await self.record(self.profile)
+                await self.record()
             await self.wait()
 
         self.loop = asyncio.new_event_loop()
@@ -657,7 +764,7 @@ class Recorder:
 
 def record_cmd(args):
     profile = resolve_profile(args, args.profile)
-    r = Recorder(profile)
+    r = Recorder(profile=profile, settings=Recorder.Settings.default(args))
     if args.loop:
         async def record_loop():
             running = True
@@ -668,14 +775,14 @@ def record_cmd(args):
             asyncio.get_running_loop().add_signal_handler(signal.SIGINT, stop)
             asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop)
             while running:
-                await r.record()
+                await r.record(profile)
             await r.wait()
         asyncio.run(record_loop())
     else:
         async def oneshot():
             asyncio.get_running_loop().add_signal_handler(signal.SIGINT, r.stop)
             asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, r.stop)
-            pp = await r.record()
+            pp = await r.record(profile)
             if pp is not None:
                 await pp
         asyncio.run(oneshot())
@@ -872,7 +979,7 @@ class GUI:
         self.root.bind("<Prior>", lambda e: self.prior())
         self.root.bind("<Next>", lambda e: self.next())
 
-        self.recorder = Recorder(self.profile)
+        self.recorder = Recorder(profile=self.profile, settings=Recorder.Settings.default(args))
 
         self.update_queue = queue.Queue()
         self.recorder.add_state_listener(self.generate_state_update_event)
@@ -904,7 +1011,7 @@ class GUI:
         elif update.state == Recorder.State.SILENCE:
             self.status["background"] = "dark red"
 
-        s = float(update.captured_frames) / self.recorder.rate
+        s = float(update.captured_frames) / update.rate
         self.status["text"] = render_duration_numeric(s)
 
     def generate_new_sound_event(self, s):
