@@ -7,9 +7,9 @@ CFLAGS += -DLOG_LEVEL=LOG_$(LOG_LEVEL)
 CFLAGS += -I$(BUILD)/usr/include
 LDFLAGS += -L$(BUILD)/usr/lib
 
-all: $(foreach i, device trec, $(BUILD)/$(i))
+all: $(foreach i, device rec, $(BUILD)/$(i))
 
-$(BUILD)/trec: trec.c
+$(BUILD)/rec: rec.c
 	$(CC) -o "$@" $(CFLAGS) $< $(LDFLAGS) -lm -lr -lasound
 
 $(BUILD)/device: device.c

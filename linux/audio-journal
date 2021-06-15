@@ -1,289 +1,1046 @@
-#!/bin/bash
+#!/usr/bin/env python3
 
-set -o nounset -o pipefail -o errexit
+import argparse
+import asyncio
+import boto3
+import eyed3
+import hashlib
+import itertools
+import json
+import logging
+import mimetypes
+import os
+import pathlib
+import queue
+import random
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import urllib
 
-TMP=$(mktemp -d)
-trap 'rm -rf $TMP' EXIT
+from enum import Enum
+from base64 import b64encode
+from datetime import date, time, datetime
 
-ACTION=record
-MODE=sessions
-TITLE=
-PRE_FILTERS="norm"
-POST_FILTERS="norm"
-AUDIO_JOURNAL=${AUDIO_JOURNAL-$HOME/audio-journal}
-SUFFIX=${AUDIO_JOURNAL_SUFFIX-.mp3}
-PLAYER=${PLAYER-mpv}
-BUCKET=${AUDIO_JOURNAL_BUCKET-rootmos-sounds}
-BUCKET_REGION=${AUDIO_JOURNAL_BUCKET_REGION-eu-central-1}
-DRY_RUN=
-while getopts "hspRrlLP:m:t:nd:" OPT; do
-    case $OPT in
-        h) ACTION=usage ;;
-        r) ACTION=record ;;
-        l) ACTION=listen ;;
-        L) ACTION=list ;;
-        P) ACTION=publish; SRC=$OPTARG ;;
-        p) MODE=practice ;;
-        s) MODE=sessions ;;
-        R) MODE=release ;;
-        d) DATE=$OPTARG ;;
-        n) DRY_RUN=1 ;;
-        m) MODE=$OPTARG ;;
-        t) TITLE=$OPTARG ;;
-        \?) echo "Invalid option: -$OPTARG" >&2; exit 2 ;;
-    esac
-done
-shift $((OPTIND-1))
+import tkinter as tk
+from tkinter import ttk
 
-if [ "$ACTION" = "usage" ]; then
-    cat <<EOF 1>&2
-$(basename "$0")
+s3 = boto3.resource("s3")
+s3_client = boto3.client("s3")
 
-actions:
-    -r      record (default)
-    -l      listen
-    -L      list
-    -P SRC  publish as current mode (default: sessions)
-    -h      show this message
+def render_duration(secs):
+    s = ""
+    if secs >= 60 * 60 * 24:
+        s += f"{secs // (60 * 60 * 24)}d"
+        secs %= 60 * 60 * 24
+    if secs >= 60 * 60:
+        s += f"{secs // (60 * 60)}h"
+        secs %= 60 * 60
+    if secs >= 60:
+        s += f"{secs // 60}m"
+        secs %= 60
+    if secs > 0:
+        s += f"{secs}s"
+    return s
 
-options:
-    -t TITLE    set title
-    -d DATE     set date (during publish)
-    -n          dry run (skip upload)
+def render_duration_numeric(secs):
+    h = int(secs / 3600)
+    secs -= h * 3600
+    m = int(secs / 60)
+    secs -= m * 60
+    s = int(secs)
+    ms = int(1000*(secs - s))
+    return f"{h:02}:{m:02}:{s:02}.{ms:03}"
 
-mode:
-    -s       jam sesssion (default)
-    -p       practice
-    -R       release
-    -m MODE  custom mode
-EOF
-    exit 0
-fi
+logger = None
+def setup_logger(level):
+    l = logging.getLogger("audio-journal")
+    l.setLevel(level)
 
-# functions
+    ch = logging.StreamHandler()
+    ch.setLevel(level)
 
-take() {
-    exec rec "$1"
-}
+    f = logging.Formatter(
+        fmt="%(asctime)s:%(name)s:%(levelname)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z")
+    ch.setFormatter(f)
 
-preprocess() {
-    sox "$1" "$2" $PRE_FILTERS
-}
+    l.addHandler(ch)
 
-save_to_secondary() {
-    if [[ -v AUDIO_JOURNAL_SECONDARY ]]; then
-        IFS=':' read -ra SECONDARY <<< "$AUDIO_JOURNAL_SECONDARY"
-        for target in "${SECONDARY[@]}"; do
-            if [ -d "$target" ]; then
-                rsync -ha --progress "$1" "$target"
-            fi
-        done
-    fi
-}
+    return l
 
-upload() {
-    aws cp --acl=public-read "$1" "s3://$BUCKET/$PREFIX"
-}
+def parse_args():
+    parser = argparse.ArgumentParser(
+            description="Audio Journal command line interface",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    subparsers = parser.add_subparsers(help="sub-commands", dest='command', required=True)
 
-url() {
-    ENC=$(sed 's/:/%3A/g' <<< "$1" | sed 's/+/%2B/g')
-    echo "https://$BUCKET.s3.$BUCKET_REGION.amazonaws.com/$PREFIX$ENC"
-}
+    home = pathlib.Path.home()
+    default_cache = home / ".cache" / "audio-journal"
+    config = home / ".config" / "audio-journal"
 
-tag() {
-    DATE=$2
-    TITLE=$3
-    YEAR=$(date --date="$DATE" +%Y)
-    LENGTH=$(soxi -D "$1")
-    FILENAME=$(basename "$1")
-    URL=$(url "$FILENAME")
-    id3v2 1>&2 -D "$1"
-    id3v2 1>&2 \
-        --artist=rootmos \
-        --song="$TITLE" \
-        --TCOM="Gustav Behm" \
-        --TCOP="$YEAR Gustav Behm" \
-        --WOAR="https://rootmos.io" \
-        --WOAF="$URL" \
-        --TRDA="$DATE" \
-        --TLEN="$LENGTH" \
-        --year="$YEAR" \
-        --genre=52 \
-        "$1"
+    parser.add_argument("--log", default="INFO", help="set log level")
+    parser.add_argument("--cache", default=default_cache, help="cache")
+    parser.add_argument("--config", default=config, help="config")
 
-    METADATA=$(dirname "$1")/$(basename --suffix="$SUFFIX" "$1").json
-    cat > "$METADATA" <<EOF
-{
-    "title": "$TITLE",
-    "sha1": "$(sha1sum "$1" | cut -d' ' -f1)",
-    "url": "$URL",
-    "filename": "$FILENAME",
-    "artist": "rootmos",
-    "composer": "Gustav Behm",
-    "date": "$DATE",
-    "year": $YEAR,
-    "length": $LENGTH
-}
-EOF
+    list_cmd = subparsers.add_parser("list", help="list sounds")
+    list_cmd.add_argument("profile", metavar="PROFILE", nargs="*")
 
-    echo "$METADATA"
-}
+    record = subparsers.add_parser("record", help="record track")
+    record.add_argument("--loop", action="store_true", help="continuously record and process sounds")
+    record.add_argument("profile", metavar="PROFILE", nargs="?")
 
-postprocess() {
-    DATE=$2
-    TITLE=${3-}
+    gui = subparsers.add_parser("gui", help="run the GUI")
+    gui.add_argument("profile", metavar="PROFILE", nargs="*")
 
-    if [ -z "$TITLE" ]; then
-        if [ "$MODE" = "practice" ]; then
-            TITLE="Session @ $DATE"
-        else
-            read -rp "Title: " TITLE
-        fi
-    fi
+    return parser.parse_args()
 
-    if [ "$MODE" = "release" ]; then
-        OUT=$AUDIO_JOURNAL/${DATE}_$(tr ' ' '-' <<< "$TITLE")$SUFFIX
-    else
-        mkdir -p "$AUDIO_JOURNAL/$MODE"
-        OUT=$AUDIO_JOURNAL/$MODE/$DATE$SUFFIX
-    fi
+class Cache:
+    def __init__(self, path):
+        self.path = path
 
-    sox --ignore-length "$1" "$OUT" $POST_FILTERS
-    METADATA=$(tag "$OUT" "$DATE" "$TITLE")
-    if [ "$DRY_RUN" != 1 ]; then
-        save_to_secondary "$OUT"
-        save_to_secondary "$METADATA"
-        upload "$OUT"
-        upload "$METADATA"
-    fi
-}
+    def _lazy_init(self):
+        if not self.path.exists():
+            logger.info(f"creating cache: {self.path}")
+            self.path.mkdir(parents=True)
 
-get_tag() {
-    id3v2 --list "$2" | grep "^$1" | sed 's/^'"$1"'[^:]*: \(.*\)$/\1/'
-}
+    def _path(self, parts):
+        m = hashlib.sha256()
+        for p in parts:
+            m.update(bytes(p, "UTF-8"))
+        return self.path / m.hexdigest()
 
-publish() {
-    TITLE=$2
-    if [ -z "$TITLE" ]; then
-        TITLE=$(get_tag TIT2 "$1")
-    fi
+    class Object:
+        def __init__(self, cache, keys):
+            self.cache = cache
+            self.path = self.cache._path(parts=keys)
+            self.keys = keys
 
-    DATE=${DATE-$(get_tag TRDA "$1")}
-    if [ -z "$DATE" ]; then
-        DATE=$(date -Is)
-    fi
+        def exists(self):
+            return self.path.exists()
 
-    POST_FILTERS='' postprocess "$1" "$DATE" "$TITLE"
-}
+        def get_string(self):
+            return self.path.read_text() if self.exists() else None
 
-playback() {
-    $PLAYER "$1"
-}
+        def put_string(self, s):
+            self.cache._lazy_init()
+            logger.debug(f"writing cached object: {self.path}")
+            self.path.write_text(s)
 
-list() {
-    export -f url
-    aws s3 ls "s3://$BUCKET/$PREFIX" \
-        | awk '{ print $4 }' \
-        | grep -v ".json$" \
-        | sort -r | while read -r f; do
-        url "$(basename "$f")"
-    done
-}
+        def get_json(self):
+            s = self.get_string()
+            return s and json.loads(s)
 
-choose_takes_dir() {
-    IFS=':' read -ra TAKES <<< "${AUDIO_JOURNAL_TAKES-}"
-    for target in "${TAKES[@]}"; do
-        if [ -d "$target" ]; then
-            echo "$target"
+        def put_json(self, o):
+            self.put_string(json.dumps(o))
+
+        def json(self, f):
+            j = self.get_json()
+            if j is None:
+                j = f()
+                self.put_json(j)
+            return j
+
+    class NullObject:
+        def exists(self):
+            return None
+        def get_string(self):
+            return None
+        def get_json(self):
+            return None
+
+    def __call__(self, *keys):
+        if self.path:
+            return Cache.Object(cache=self, keys=keys)
+        else:
+            return Cache.NullObject()
+
+cache = None
+def setup_cache(args):
+    return Cache(path=args.cache)
+
+def lenient_datetime_parse(s):
+    try:
+        d = date.fromisoformat(s)
+        tz = datetime.now().astimezone().tzinfo
+        return datetime.combine(d, time(0, 0, 0), tz)
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        t = re.sub(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}).\d*([+-]\d{2}:\d{2})", r"\1\2", s)
+        return datetime.fromisoformat(t)
+
+class Sound:
+    def __init__(self, title, artist, composer, length, url, sha1, datetime, filename, mimetype, prefix):
+        self.title = title
+        self.artist = artist
+        self.composer = composer
+        self.length = length
+        self.url = url
+        self.sha1 = sha1
+        self.datetime = datetime
+        self.filename = filename
+        self.mimetype = mimetype
+        self.local = None
+
+        self.id = hash((prefix, self.filename))
+
+    def from_json(j, prefix):
+        return Sound(
+                title = j["title"],
+                artist = j["artist"],
+                composer = j["composer"],
+                length = j["length"],
+                url = j["url"],
+                sha1 = j["sha1"],
+                filename = j["filename"],
+                mimetype = j.get("mimetype"),
+                datetime = lenient_datetime_parse(j["date"]),
+                prefix = prefix)
+
+    def to_json(self):
+        return {
+            "title": self.title,
+            "artist": self.artist,
+            "composer": self.composer,
+            "length": self.length,
+            "url": self.url,
+            "sha1": self.sha1,
+            "filename": self.filename,
+            "mimetype": self.mimetype,
+            "date": self.datetime.isoformat()
+        }
+
+    def __repr__(self):
+        s = "Sound("
+        s += f"id={self.id},"
+        s += f"filename={self.filename},"
+        s += f"date={self.datetime},"
+        s += f"sha1={self.sha1},"
+        s += f"length={self.length},"
+        s += f"mimetype={self.mimetype},"
+        s += f"url={self.url},"
+        s += f"local={self.local})"
+        return s
+
+
+class Profile:
+    def __init__(self, name, filename, bucket, local, title, artist, composer, prefix, allow_uploads):
+        self.name = name
+        self.filename = filename
+        self.bucket = bucket
+        self.local = local
+        self.title = title
+        self.artist = artist
+        self.composer = composer
+        self.prefix = prefix
+        self.allow_uploads = allow_uploads
+
+    def default():
+        return Profile(
+                name = "default",
+                filename = "%Y-%m-%dT%H:%M:%S%z.mp3",
+                title = "Session @ %Y-%m-%dT%H:%M:%S%z",
+                local = pathlib.Path.home() / "audio-journal",
+                bucket = None,
+                artist = None,
+                composer = None,
+                prefix = None,
+                allow_uploads = None)
+
+    def from_json(j, fallback_name):
+        return Profile(
+                name = j.get("name", fallback_name),
+                filename = j["filename"],
+                bucket = j.get("bucket"),
+                local = j.get("local"),
+                title = j.get("title"),
+                artist = j.get("artist"),
+                composer = j.get("composer"),
+                prefix = j.get("prefix"),
+                allow_uploads = j.get("allow_uploads", True))
+
+    def __repr__(self):
+        s = "Profile("
+        s += f"name={self.name},"
+        s += f"prefix={self.prefix},"
+        s += f"filename={self.filename},"
+        s += f"bucket={self.bucket},"
+        s += f"local={self.local},"
+        s += f"title={self.title},"
+        s += f"artist={self.artist},"
+        s += f"composer={self.composer},"
+        s += f"allow_uploads={self.allow_uploads})"
+        return s
+
+def resolve_profile(args, profile=None):
+    d = pathlib.Path(args.config) / "profiles"
+
+    if profile is None:
+        f = d / "default"
+        if not f.exists():
+            p = Profile.default()
+            logger.debug(f"generating default profile: {p}")
+            return p
+        if f.is_symlink():
+            f = f.resolve()
+    else:
+        f = d / profile
+        if not f.exists():
+            f = d / f"{profile}.json"
+
+    if f.exists():
+        p = Profile.from_json(json.loads(f.read_text()), fallback_name=f.stem)
+        if profile is None:
+            logger.debug(f"default profile resolves to: {p}")
+        else:
+            logger.debug(f"resolved profile: {p}")
+        return p
+    else:
+        raise RuntimeError(f"can not load profile: {f}")
+
+def load_profiles(args):
+    d = pathlib.Path(args.config) / "profiles"
+
+    if len(args.profile) != 0:
+        ps = [ resolve_profile(args, p) for p in args.profile ]
+        return ps, ps[0]
+
+    ps = set()
+
+    default = d / "default"
+    if not default.exists():
+        default = d / "default.json"
+    if default.exists():
+        if default.is_symlink():
+            default = default.resolve()
+        else:
+            default = Profile.from_json(json.loads(default.read_text()), fallback_name=default.stem)
+
+    else:
+        default = None
+
+    for f in d.iterdir():
+        if f.is_dir():
+            continue
+
+        if f.stem == "default":
+            continue
+
+        p = Profile.from_json(json.loads(f.read_text()), fallback_name=f.stem)
+        ps.add(p)
+        if isinstance(default, pathlib.PurePath) and f.resolve() == default.resolve():
+            default = p
+
+    if ps:
+        logger.debug(f"loaded profiles: {ps} default={default}")
+        return ps, default
+    else:
+        logger.debug(f"generating default profile: {p}")
+        p = Profile.default()
+        return [p], p
+
+def load_sounds(args, *profiles):
+
+    ss = dict()
+    for p in profiles:
+        if p.bucket is not None:
+            b = s3.Bucket(p.bucket)
+
+            if p.prefix is None:
+                i = b.objects.all()
+            else:
+                i = b.objects.filter(Prefix=p.prefix)
+
+            for o in i:
+                if not o.key.endswith(".json"):
+                    continue
+
+                j = cache(b.name, o.key, o.e_tag).json(lambda: json.loads(o.get()["Body"].read()))
+                s = Sound.from_json(j, prefix=p.prefix)
+                ss[s.id] = s
+
+        if p.local is not None:
+            def load(f):
+                s = Sound.from_json(json.loads(f.read_text()), prefix=p.prefix)
+                s.local = f.parent / s.filename
+                ss[s.id] = s
+
+            l = pathlib.Path(p.local).expanduser()
+            if p.prefix is not None:
+                l /= p.prefix
+
+            def go(d):
+                if not d.exists():
+                    return
+                for f in d.iterdir():
+                    if f.is_dir():
+                        go(f)
+                    else:
+                        if f.name.endswith(".json"):
+                            load(f)
+            go(l)
+
+    logger.debug(f"loaded sounds: {ss.values()}")
+    return ss
+
+def list_cmd(args):
+    if len(args.profile) == 0:
+        ps = [ resolve_profile(args, None) ]
+    else:
+        ps = [ resolve_profile(args, p) for p in args.profile ]
+    logger.debug(f"listing sounds: {ps}")
+
+    ss = load_sounds(args, *ps)
+
+    for s in sorted(ss.values(), key=lambda s: s.datetime):
+        if s.local is not None:
+            print(s.local)
+        elif s.url is not None:
+            print(s.url)
+
+def compute_sha1_md5(fn):
+    with open(fn, mode="rb") as f:
+        sha1 = hashlib.sha1()
+        md5 = hashlib.md5()
+        while True:
+            bs = f.read(4096)
+            if len(bs) == 0: break
+            sha1.update(bs)
+            md5.update(bs)
+        return (sha1.digest(), md5.digest())
+
+def postprocess(profile, fn):
+    bucket = None
+    if profile.bucket is not None:
+        bucket = s3.Bucket(profile.bucket)
+        bucket_location = s3_client.get_bucket_location(Bucket=bucket.name)["LocationConstraint"]
+
+    date = datetime.strptime(fn.name, profile.filename)
+    af = eyed3.load(fn)
+    af.tag = eyed3.id3.Tag()
+    af.tag.recording_date = date.date().isoformat()
+    if profile.artist is not None:
+        af.tag.artist = profile.artist
+    if profile.title is not None:
+        af.tag.title = date.strftime(profile.title)
+    if profile.composer is not None:
+        af.tag.composer = profile.composer
+    af.tag.save()
+    duration = af.info.time_secs
+    mimetype, _ = mimetypes.guess_type(fn)
+    sha1, md5 = compute_sha1_md5(fn)
+
+    if bucket is not None:
+        if profile.prefix is not None:
+            key = f"{profile.prefix}/{fn.name}"
+        else:
+            key = fn.name
+
+        url = "https://%s.s3.%s.amazonaws.com/%s" % (
+                bucket.name,
+                bucket_location,
+                urllib.parse.quote(key, safe="~()*!.'/"))
+    else:
+        url = None
+
+    s = Sound(
+            title = af.tag.title,
+            artist = af.tag.artist,
+            composer = af.tag.composer,
+            length = duration,
+            url = url,
+            sha1 = sha1.hex(),
+            datetime = date,
+            filename = fn.name,
+            mimetype = mimetype,
+            prefix = profile.prefix)
+
+    metadata = bytes(json.dumps(s.to_json()), "UTF-8")
+
+    if bucket is not None:
+        logger.debug(f"uploading sound file: s3://{bucket.name}/{key}")
+        with open(fn, mode="rb") as f:
+            bucket.put_object(
+                    Key = key,
+                    ACL = "public-read",
+                    Body = f,
+                    ContentType = mimetype,
+                    ContentMD5 = str(b64encode(md5), "UTF-8"))
+
+        if profile.prefix is not None:
+            key = f"{profile.prefix}/{fn.stem}.json"
+        else:
+            key = f"{fn.stem}.json"
+
+        md5 = hashlib.md5()
+        md5.update(metadata)
+        md5 = md5.digest()
+        logger.debug(f"uploading sound metadata: s3://{bucket.name}/{key}")
+        bucket.put_object(
+                Key = key,
+                ACL = "public-read",
+                Body = metadata,
+                ContentType = "application/json",
+                ContentMD5 = str(b64encode(md5), "UTF-8"))
+
+    if profile.local is not None:
+        d = pathlib.Path(profile.local).expanduser()
+        if profile.prefix is not None:
+            d = d / pathlib.Path(profile.prefix)
+
+        if not d.exists():
+            d.mkdir(parents=True)
+
+        target = d / fn.name
+        logger.debug(f"copying local sound file: {target}")
+        shutil.copy(fn, target)
+        s.local = target
+
+        target = d / f"{fn.stem}.json"
+        logger.debug(f"writing local sound metadata: {target}")
+        target.write_bytes(metadata)
+
+    if logger.level <= logging.DEBUG:
+        logger.debug(f"successfully processed sound: {s}")
+    else:
+        logger.info(f"successfully processed: {s.title}")
+
+    return s
+
+class Recorder:
+    class State(Enum):
+        NOT_RUNNING = 0
+        WAITING = 1
+        RECORDING = 2
+        SILENCE = 3
+        STOPPING = 4
+
+    class Update:
+        def __init__(self, state, captured_frames, peak, rms):
+            self.state = state
+            self.captured_frames = captured_frames
+            self.peak = peak
+            self.rms = rms
+
+    def __init__(self, profile, rate=44100):
+        self.rate = rate
+        self.state_listeners = set()
+        self.sound_listeners = set()
+        self.process = None
+        self.pps = set()
+
+        self.recording_loop_running = None
+        self.loop = None
+        self.thread = None
+        self._profile = profile
+
+    def add_state_listener(self, f):
+        self.state_listeners.add(f)
+
+    def remove_state_listener(self, f):
+        self.state_listeners.remove(f)
+
+    def add_sound_listener(self, f):
+        self.sound_listeners.add(f)
+
+    def remove_sound_listener(self, f):
+        self.sound_listeners.remove(f)
+
+    async def record(self, profile):
+        if self.process is not None:
+            raise NotImplementedError
+        logger.debug(f"recording using profile: {profile}")
+
+        wd = tempfile.TemporaryDirectory(prefix="audio-journal-")
+        logger.debug(f"recording workdir: {wd.name}")
+
+        rec = os.environ.get("AUDIO_JOURNAL_REC", default="audio-journal-trec")
+        args = [ "-r", str(self.rate) ]
+        if len(self.state_listeners) > 0:
+            class Server:
+                def connection_made(self, transport):
+                    pass
+
+                def datagram_received(server, data, addr):
+                    state = Recorder.State(data[0])
+                    captured_frames = int.from_bytes(data[1:9], byteorder=sys.byteorder)
+                    rms = int.from_bytes(data[9:11], byteorder=sys.byteorder)
+                    peak = int.from_bytes(data[11:13], byteorder=sys.byteorder)
+                    u = Recorder.Update(state=state, captured_frames=captured_frames, rms=rms, peak=peak)
+                    for f in self.state_listeners:
+                        f(u)
+
+            r, w = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+            w.set_inheritable(True)
+
+            loop = asyncio.get_running_loop()
+            transport, protocol = await loop.create_datagram_endpoint(lambda: Server(), sock=r)
+            args.extend([ "-M", str(w.fileno()), "-m", str(10) ])
+        args.append(f"{wd.name}/{profile.filename}")
+        self.process = await asyncio.create_subprocess_exec(trec, *args, close_fds=False)
+        if len(self.state_listeners) > 0:
+            w.close()
+
+        ec = await self.process.wait()
+        if ec != 0:
+            raise RuntimeError(f"{trec} terminated with non-zero exit code: {ec}")
+        self.process = None
+
+        fs = list(pathlib.Path(wd.name).iterdir())
+        if len(fs) == 0:
+            return None
+        elif len(fs) == 1:
+            [fn] = fs
+        else:
+            raise RuntimeError(f"{trec} produced unexpected files")
+
+        def wrapper(wd):
+            with wd:
+                s = postprocess(profile, fn)
+                for f in self.sound_listeners:
+                    f(s)
+                return s
+        pp = asyncio.create_task(asyncio.to_thread(wrapper, wd))
+        self.pps.add(pp)
+        pp.add_done_callback(self.pps.remove)
+        return pp
+
+    async def wait(self):
+        if len(self.pps) > 0:
+            await asyncio.wait(self.pps)
+
+    def stop(self):
+        if self.thread is not None:
+            def f():
+                self.recording_loop_running = False
+            self.loop.call_soon_threadsafe(f)
+        if self.process is not None:
+            self.process.terminate()
+
+    def start(self):
+        async def record_loop():
+            while self.recording_loop_running:
+                await self.record(self.profile)
+            await self.wait()
+
+        self.loop = asyncio.new_event_loop()
+        self.recording_loop_running = True
+        self.thread = threading.Thread(target=lambda: self.loop.run_until_complete(record_loop()))
+        self.thread.start()
+
+    @property
+    def profile(self):
+        return self._profile
+
+    @profile.setter
+    def profile(self, p):
+        if self._profile == p:
             return
-        fi
-    done
-    echo "$AUDIO_JOURNAL/takes"
-}
+        self._profile = p
 
-record() {
-    clear
-    read -rsn1 -p "Ready? ($MODE) "
+        if self.process is not None:
+            self.process.terminate()
 
-    TAKES_DIR=$(choose_takes_dir)
-    mkdir -p "$TAKES_DIR"
+        logger.debug(f"switching recording profile: {p}")
 
-    DATE=$(date -Is)
-    case "$MODE" in
-        release)
-            RAW=$TAKES_DIR/$DATE.raw.flac
-            PRE=$TMP/$DATE.pre.flac
-            ;;
-        *)
-            RAW=$TMP/$DATE.raw.flac
-            PRE=$TMP/$DATE.pre.flac
-            ;;
-    esac
+    def join(self):
+        if self.thread is not None:
+            self.thread.join()
 
-    clear
-    take "$RAW" &
-    PID=$!
-    IFS= read -rs -n1 TAKE_CHOICE
+def record_cmd(args):
+    profile = resolve_profile(args, args.profile)
+    r = Recorder(profile)
+    if args.loop:
+        async def record_loop():
+            running = True
+            def stop():
+                nonlocal running
+                running = False
+                r.stop()
+            asyncio.get_running_loop().add_signal_handler(signal.SIGINT, stop)
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop)
+            while running:
+                await r.record()
+            await r.wait()
+        asyncio.run(record_loop())
+    else:
+        async def oneshot():
+            asyncio.get_running_loop().add_signal_handler(signal.SIGINT, r.stop)
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, r.stop)
+            pp = await r.record()
+            if pp is not None:
+                await pp
+        asyncio.run(oneshot())
 
-    kill -INT $PID
-    wait $PID
+class Player:
+    def __init__(self):
+        self.players = {}
+        self.current = None
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=lambda: self.loop.run_forever())
+        self.thread.start()
 
-    if [ "$MODE" = "release" ] && [ -z "$TAKE_CHOICE" ]; then
-        clear
-        preprocess "$RAW" "$PRE"
-        playback "$PRE"
-        read -rp "Yay or nay? " POST_CHOICE
-    fi
+    def _player(self, sound):
+        if sound.id not in self.players:
+            target = sound.local or sound.url
+            if target is None:
+                logger.warn(f"no available source for sound: {sound}")
+                return None
+            self.players[sound.id] = MPV(target)
 
-    case "${POST_CHOICE-y}" in
-        y|Y) postprocess "$RAW" "$DATE" "$TITLE";;
-    esac
-}
+        return self.players[sound.id]
 
-require() {
-    OK=true
-    for x in "$@"; do
-        if ! command -v "$x" > /dev/null; then
-            echo "please install $x" 1>&2
-            OK=false
-        fi
-    done
+    def load(self, sound):
+        p = self._player(sound)
+        if p.started is None:
+            self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.start()))
 
-    $OK || exit 1
-}
+    def toggle(self, sound):
+        p = self._player(sound)
+        logger.debug("toggle")
+        self.current = sound
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.toggle()))
 
-# run
+    def pause(self, sound=None):
+        if sound is None:
+            sound = self.current
+        if sound is None:
+            return
+        p = self._player(sound)
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.pause()))
 
-case "$MODE" in
-    release) PREFIX= ;;
-    *) PREFIX=$MODE/ ;;
-esac
+    def seek(self, sound, **kwargs):
+        p = self._player(sound)
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.seek(**kwargs)))
 
-prepare() {
-    require aws sox id3v2 rsync
-    mkdir -p "$AUDIO_JOURNAL"
-}
+    def stop(self):
+        async def f():
+            for p in self.players.values():
+                await p.stop()
+            self.loop.stop()
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(f()))
 
-prepare_read_only() {
-    require aws
-}
+    def join(self):
+        self.thread.join()
 
-case $ACTION in
-    record)
-        prepare
-        while true; do record; done
-        ;;
-    publish)
-        prepare
-        publish "$SRC" "$TITLE"
-        ;;
-    list)
-        prepare_read_only
-        list
-        ;;
-    listen)
-        prepare_read_only
-        list | $PLAYER --playlist=-
-        ;;
-    *) exit 1;;
-esac
+class MPV:
+    def __init__(self, target):
+        self.target = target
+        self.started = None
+        self.process = None
+        self.ipc = None
+        self.responses = {}
+
+    async def send_command(self, *args):
+        rid = random.randint(0, sys.maxsize)
+        cmd = { "command": args, "async": True, "request_id": rid }
+        logger.debug(f"sending event: {cmd}")
+        self.ipc.send(bytes(json.dumps(cmd) + "\n", "UTF-8"))
+        e = self.responses[rid] = asyncio.Event()
+        await e.wait()
+        rsp = self.responses[rid]
+        if rsp["error"] != "success":
+            raise RuntimeError(f"mpv command failed: cmd={cmd} rsp={rsp}")
+        else:
+            return rsp.get("data")
+
+    async def toggle(self):
+        paused = await self.send_command("get_property", "pause")
+        await self.send_command("set_property", "pause", not paused)
+
+    async def pause(self):
+        await self.send_command("set_property", "pause", True)
+
+    async def resume(self):
+        await self.send_command("set_property", "pause", False)
+
+    async def seek(self, relative=None, absolute=None, absolute_percent=None):
+        if relative is not None:
+            await self.send_command("seek", relative, "relative")
+        if absolute is not None:
+            await self.send_command("seek", absolute, "absolute")
+        if absolute_percent is not None:
+            await self.send_command("seek", absolute_percent, "absolute-percent")
+
+    async def start(self):
+        if self.started is not None:
+            return
+
+        loop = asyncio.get_running_loop()
+
+        class Server:
+            def connection_made(self, transport):
+                pass
+
+            def datagram_received(server, data, addr):
+                e = json.loads(data.decode())
+                logger.debug(f"message from mpv: {e}")
+                if "event" in e:
+                    pass
+                elif "request_id" in e and "error" in e:
+                    rid = e["request_id"]
+                    async def f():
+                        t = self.responses[rid]
+                        self.responses[rid] = e
+                        t.set()
+                    loop.call_soon_threadsafe(lambda: loop.create_task(f())) # TODO: is call_soon_threadsafe necessary?
+
+        self.ipc, w = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+        w.set_inheritable(True)
+        await loop.create_datagram_endpoint(lambda: Server(), sock=self.ipc)
+
+        mpv = os.environ.get("MPV", default="mpv")
+        args = [
+            "--pause",
+            "--no-terminal",
+            "--keep-open", "--keep-open-pause=no",
+            f"--input-ipc-client=fd://{w.fileno()}",
+            self.target
+        ]
+
+        logger.debug(f"running {mpv} {args}")
+        self.process = await asyncio.create_subprocess_exec(mpv, *args, close_fds=False)
+        w.close()
+        self.started = datetime.now()
+
+    async def stop(self):
+        if self.process is not None:
+            self.process.terminate()
+            await self.process.wait()
+            self.process = None
+
+class GUI:
+    def __init__(self, args):
+        self.running = True
+        self.args = args
+        self.player = Player()
+        self._profile = None
+        self.sounds = {}
+
+        self.root = tk.Tk(className="audio-journal")
+        self.root.title("audio-journal")
+
+        self.sounds_view = ttk.Treeview(self.root, columns=("duration",), selectmode="browse")
+        self.sounds_view.heading("duration", text="Duration")
+        self.sounds_view.grid(row=0, column=0, columnspan=3, sticky=(tk.N, tk.S, tk.E, tk.W))
+        self.sounds_view.bind("<<TreeviewSelect>>", lambda e: self.sound_selection())
+
+        profiles, self.profile = load_profiles(args)
+        self.profiles = sorted(profiles, key=lambda p: p.name)
+        i = 0
+        for p in self.profiles:
+            if p == self.profile:
+                break
+            i += 1
+        self.profiles_view = tk.Listbox(self.root, height=10, selectmode="single", listvariable=tk.StringVar(value=[p.name for p in self.profiles]))
+        self.profiles_view.selection_set(i)
+        self.profiles_view.grid(row=1, rowspan=2, column=2, sticky=(tk.N, tk.S, tk.E, tk.W))
+        self.profiles_view.bind("<<ListboxSelect>>", lambda e: self.handle_profile_select())
+
+        self.status = ttk.Label(self.root, text='00:00:00.000', font="TkFixedFont", anchor="center", relief="sunken")
+        self.status.grid(row=1, rowspan=2, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
+
+        self.peak = ttk.Progressbar(self.root, orient=tk.HORIZONTAL, mode="determinate", maximum=32767)
+        self.peak.grid(row=1, column=1, sticky=(tk.N, tk.S, tk.E, tk.W))
+        self.rms = ttk.Progressbar(self.root, orient=tk.HORIZONTAL, mode="determinate", maximum=32767)
+        self.rms.grid(row=2, column=1, sticky=(tk.N, tk.S, tk.E, tk.W))
+
+        self.root.columnconfigure(0, weight=1)
+        self.root.columnconfigure(1, weight=5)
+        self.root.columnconfigure(2, weight=2)
+        self.root.rowconfigure(0, weight=100)
+        self.root.rowconfigure(1, weight=1)
+        self.root.rowconfigure(2, weight=1)
+
+        self.root.bind("<Escape>", lambda e: self.stop())
+        self.root.bind("<q>", lambda e: self.stop())
+        self.root.protocol("WM_DELETE_WINDOW", self.stop)
+        self.root.bind("<space>", lambda e: self.play_pause_toggle())
+        self.root.bind("<Double-Button-1>", lambda e: self.handle_double_click())
+        self.root.bind("<Left>", lambda e: self.seek(relative=-5))
+        self.root.bind("<Right>", lambda e: self.seek(relative=5))
+        self.root.bind("<Home>", lambda e: self.seek(absolute=0))
+        self.root.bind("<End>", lambda e: self.seek(absolute_percent=100))
+        self.root.bind("<Prior>", lambda e: self.prior())
+        self.root.bind("<Next>", lambda e: self.next())
+
+        self.recorder = Recorder(self.profile)
+
+        self.update_queue = queue.Queue()
+        self.recorder.add_state_listener(self.generate_state_update_event)
+        self.root.bind("<<RecordingStateUpdate>>", self.handle_recording_state_update);
+
+        self.sound_queue = queue.Queue()
+        self.recorder.add_sound_listener(self.generate_new_sound_event)
+        self.root.bind("<<NewSound>>", self.handle_new_sounds);
+
+    def generate_state_update_event(self, update):
+        self.update_queue.put(update, block=False)
+        self.root.event_generate("<<RecordingStateUpdate>>")
+
+    def handle_recording_state_update(self, *args):
+        update = None
+        try:
+            while True:
+                update = self.update_queue.get(block=False)
+        except queue.Empty:
+            pass
+
+        self.rms["value"] = update.rms
+        self.peak["value"] = update.peak
+
+        if update.state == Recorder.State.WAITING:
+            self.status["background"] = "green"
+        elif update.state == Recorder.State.RECORDING:
+            self.status["background"] = "red"
+        elif update.state == Recorder.State.SILENCE:
+            self.status["background"] = "dark red"
+
+        s = float(update.captured_frames) / self.recorder.rate
+        self.status["text"] = render_duration_numeric(s)
+
+    def generate_new_sound_event(self, s):
+        self.sound_queue.put(s)
+        self.root.event_generate("<<NewSound>>")
+
+    def handle_new_sounds(self, *args):
+        try:
+            while True:
+                self.insert_sound(self.sound_queue.get(block=False))
+        except queue.Empty:
+            pass
+
+    def insert_sound(self, s):
+        self.sounds[s.id] = s
+        self.sounds_view.insert("", "end", s.id, text=s.title, values=(render_duration(round(s.length)),))
+        self.sounds_view.see(s.id)
+
+    def stop(self):
+        self.recorder.remove_state_listener(self.generate_state_update_event)
+        self.recorder.remove_sound_listener(self.generate_new_sound_event)
+        self.recorder.stop()
+        self.player.stop()
+        self.root.destroy()
+
+    def handle_double_click(self):
+        if self.root.focus_get() == self.sounds_view:
+            self.play_pause_toggle()
+
+    def play_pause_toggle(self):
+        s = self.sounds_view.selection()
+        if len(s) == 0:
+            self.player.pause()
+        elif len(s) == 1:
+            s = self.sounds[int(s[0])]
+            self.player.toggle(s)
+        else:
+            raise RuntimeError("unexpected amount of selected sounds")
+
+    def sound_selection(self):
+        s = self.sounds_view.selection()
+        if len(s) == 1:
+            s = self.sounds[int(s[0])]
+            if self.player.current is not None and s != self.player.current:
+                self.player.pause(self.player.current)
+            self.player.load(s)
+        elif len(s) == 0:
+            self.player.pause()
+        else:
+            raise RuntimeError("unexpected amount of selected sounds")
+
+    def prior(self):
+        s = self.sounds_view.selection()
+        if len(s) == 0:
+            last = None
+            index = 0
+            for s in self.sounds.keys():
+                i = self.sounds_view.index(s)
+                if i > index:
+                    index = i
+                    last = s
+            self.sounds_view.selection_set(last)
+            self.sounds_view.see(last)
+        elif len(s) == 1:
+            prev = self.sounds_view.prev(s[0])
+            if prev == "":
+                return
+            self.sounds_view.selection_set(prev)
+            self.sounds_view.see(prev)
+        else:
+            raise RuntimeError("unexpected amount of selected sounds")
+
+    def next(self):
+        s = self.sounds_view.selection()
+        if len(s) == 0:
+            first = None
+            index = sys.maxsize
+            for s in self.sounds.keys():
+                i = self.sounds_view.index(s)
+                if i < index:
+                    index = i
+                    first = s
+            self.sounds_view.selection_set(first)
+            self.sounds_view.see(first)
+        elif len(s) == 1:
+            next_ = self.sounds_view.next(s[0])
+            if next_ == "":
+                return
+            self.sounds_view.selection_set(next_)
+            self.sounds_view.see(next_)
+        else:
+            raise RuntimeError("unexpected amount of selected sounds")
+
+    def seek(self, **kwargs):
+        s = self.sounds_view.selection()
+        if len(s) == 1:
+            s = self.sounds[int(s[0])]
+            self.player.seek(s, **kwargs)
+        else:
+            raise RuntimeError("unexpected amount of selected sounds")
+
+    def handle_profile_select(self):
+        [i] = self.profiles_view.curselection()
+        self.recorder.profile = self.profile = self.profiles[i]
+
+    @property
+    def profile(self):
+        return self._profile
+
+    @profile.setter
+    def profile(self, p):
+        logger.debug(f"selecting profile: {p}")
+        self._profile = p
+        self.sounds_view.delete(*self.sounds.keys())
+        self.sounds = load_sounds(args, p)
+        for s in sorted(self.sounds.values(), key=lambda s: s.datetime):
+            self.insert_sound(s)
+
+    def run(self):
+        self.recorder.start()
+        self.root.mainloop()
+        self.recorder.join()
+        self.player.join()
+
+if __name__ == "__main__":
+    args = parse_args()
+    logger = setup_logger(args.log.upper())
+    logger.debug(f"args: {args}")
+
+    cache = setup_cache(args)
+
+    if args.command == "list":
+        list_cmd(args)
+    elif args.command == "record":
+        record_cmd(args)
+    elif args.command == "gui":
+        GUI(args).run()
+    else:
+        raise NotImplementedError(f"subcommand {args.command}")
