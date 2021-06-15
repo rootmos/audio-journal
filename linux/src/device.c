@@ -13,6 +13,8 @@ struct state {
     int invert_match;
     regex_t* pattern;
     size_t patterns;
+
+    int hang;
 };
 
 static void print_usage(int fd, const char* prog)
@@ -23,6 +25,7 @@ static void print_usage(int fd, const char* prog)
     dprintf(fd, "  -v invert match\n");
     dprintf(fd, "  -i ignore case\n");
     dprintf(fd, "  -E extended regex\n");
+    dprintf(fd, "  -H hang until chosen source is removed\n");
 }
 
 static void parse_opts(struct state* st, int argc, char* argv[])
@@ -30,7 +33,7 @@ static void parse_opts(struct state* st, int argc, char* argv[])
     int regex_flags = REG_NOSUB;
 
     int res;
-    while((res = getopt(argc, argv, "viEh")) != -1) {
+    while((res = getopt(argc, argv, "viEHh")) != -1) {
         switch(res) {
         case 'v':
             st->invert_match = 1;
@@ -40,6 +43,9 @@ static void parse_opts(struct state* st, int argc, char* argv[])
             break;
         case 'E':
             regex_flags |= REG_EXTENDED;
+            break;
+        case 'H':
+            st->hang = 1;
             break;
         case 'h':
         default:
@@ -137,17 +143,29 @@ static void source_info_callback(pa_context* c,
 choose:
     st->choice = i->index;
     debug("chosing stream: %"PRIu32, st->choice);
-    st->m->quit(st->m, 0);
+
+    printf("pulse:%"PRIu32"\n", st->choice);
+    fflush(stdout);
+
+    if(!st->hang) {
+        st->m->quit(st->m, 0);
+    }
 }
 
 static void event_callback(pa_context* c,
                            pa_subscription_event_type_t t, uint32_t idx,
                            void* opaque)
 {
+    struct state* st = opaque;
+
     if(t == (PA_SUBSCRIPTION_EVENT_NEW | PA_SUBSCRIPTION_EVENT_SOURCE)) {
         debug("new source idx=%"PRIu32, idx);
-
         pa_context_get_source_info_by_index(c, idx, source_info_callback, opaque);
+    } else if(t == (PA_SUBSCRIPTION_EVENT_REMOVE | PA_SUBSCRIPTION_EVENT_SOURCE)) {
+        if(st->hang && st->choice == idx) {
+            debug("chosen source has been removed: idx=%"PRIu32, idx);
+            st->m->quit(st->m, 0);
+        }
     } else {
         trace("ignored event: type=%d idx=%"PRIu32, t, idx);
     }
@@ -214,10 +232,6 @@ int main(int argc, char* argv[])
 
     pa_signal_done();
     pa_mainloop_free(l);
-
-    if(st.choice != PA_INVALID_INDEX) {
-        printf("pulse:%"PRIu32"\n", st.choice);
-    }
 
     return ec;
 }

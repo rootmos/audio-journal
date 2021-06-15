@@ -596,7 +596,8 @@ class Recorder:
         self.settings = settings
         self.state_listeners = set()
         self.sound_listeners = set()
-        self.process = None
+        self.rec_process = None
+        self.device_process = None
         self.pps = set()
 
         self.recording_loop_running = None
@@ -617,10 +618,10 @@ class Recorder:
         self.sound_listeners.remove(f)
 
     async def wait_for_device(self, settings):
-        if self.process is not None:
+        if self.device_process is not None:
             raise NotImplementedError
         device_exe = os.environ.get("AUDIO_JOURNAL_DEVICE", default="audio-journal-device")
-        args = []
+        args = [ "-H" ]
 
         if settings.invert_match:
             args.append("-v")
@@ -637,27 +638,32 @@ class Recorder:
         else:
             logger.debug(f"waiting for devices: {settings.device}")
 
-        self.process = await asyncio.create_subprocess_exec(device_exe, *args, stdout=subprocess.PIPE)
-        (stdout, _) = await self.process.communicate()
-        self.process = None
-        ls = stdout.splitlines()
-        if len(ls) == 0:
-            logger.debug("no devices returned")
+        self.device_process = await asyncio.create_subprocess_exec(device_exe, *args, stdout=subprocess.PIPE)
+        device = await self.device_process.stdout.readline()
+        if not device:
+            await self.device_process.wait()
+            self.device_process = None
             return None
-        else:
-            if settings.post_connect_cooloff is not None:
-                await asyncio.sleep(settings.post_connect_cooloff)
-            return str(ls[0], "UTF-8")
+        device = str(device, "UTF-8").rstrip()
+        logger.debug(f"recording using device: {device}")
+
+        if settings.post_connect_cooloff is not None:
+            logger.debug(f"waiting for device to quiet down post-connect: {settings.post_connect_cooloff}")
+            await asyncio.sleep(settings.post_connect_cooloff)
+
+        return device
 
     async def record(self):
-        if self.process is not None:
-            raise NotImplementedError
         logger.debug(f"recording using profile: {self.profile}")
 
         settings = self.settings
         if self.profile.record is not None:
             settings = settings.merge(self.profile.record)
         logger.debug(f"recording using settings: {settings}")
+
+        u = Recorder.Update(state=Recorder.State.NOT_RUNNING, captured_frames=0, rate=settings.rate, rms=0, peak=0)
+        for f in self.state_listeners:
+            f(u)
 
         args = [ "-r", str(settings.rate) ]
         if settings.devices:
@@ -692,14 +698,27 @@ class Recorder:
             args.extend([ "-M", str(w.fileno()), "-m", str(10) ])
 
         args.append(f"{wd.name}/{self.profile.filename}")
-        self.process = await asyncio.create_subprocess_exec(rec, *args, close_fds=False)
+        self.rec_process = await asyncio.create_subprocess_exec(rec, *args, close_fds=False)
         if len(self.state_listeners) > 0:
             w.close()
 
-        ec = await self.process.wait()
-        if ec != 0:
-            raise RuntimeError(f"{rec} terminated with non-zero exit code: {ec}")
-        self.process = None
+        if self.device_process is not None:
+            r = asyncio.create_task(self.rec_process.wait())
+            d = asyncio.create_task(self.device_process.wait())
+            done, pending = await asyncio.wait([r, d], return_when=asyncio.FIRST_COMPLETED)
+            if d in done and r in pending:
+                self.rec_process.terminate()
+                await r
+            elif r in done and d in pending:
+                self.device_process.terminate()
+                await d
+            else:
+                raise NotImplementedError
+            self.rec_process = None
+            self.device_process = None
+        else:
+            await self.rec_process.wait()
+            self.rec_process = None
 
         fs = list(pathlib.Path(wd.name).iterdir())
         if len(fs) == 0:
@@ -729,8 +748,10 @@ class Recorder:
             def f():
                 self.recording_loop_running = False
             self.loop.call_soon_threadsafe(f)
-        if self.process is not None:
-            self.process.terminate()
+        if self.rec_process is not None:
+            self.rec_process.terminate()
+        if self.device_process is not None:
+            self.device_process.terminate()
 
     def start(self):
         async def record_loop():
@@ -753,8 +774,10 @@ class Recorder:
             return
         self._profile = p
 
-        if self.process is not None:
-            self.process.terminate()
+        if self.device_process is not None:
+            self.device_process.terminate()
+        if self.rec_process is not None:
+            self.rec_process.terminate()
 
         logger.debug(f"switching recording profile: {p}")
 
@@ -1004,7 +1027,9 @@ class GUI:
         self.rms["value"] = update.rms
         self.peak["value"] = update.peak
 
-        if update.state == Recorder.State.WAITING:
+        if update.state == Recorder.State.NOT_RUNNING:
+            self.status["background"] = "grey"
+        elif update.state == Recorder.State.WAITING:
             self.status["background"] = "green"
         elif update.state == Recorder.State.RECORDING:
             self.status["background"] = "red"
