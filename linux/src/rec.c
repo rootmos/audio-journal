@@ -25,7 +25,6 @@ struct options {
 
     unsigned int monitor_period_ms;
     float peak_seconds;
-    float rms_seconds;
 
     int monitor_fd;
 };
@@ -60,7 +59,6 @@ static void parse_opts(struct options* opts, int argc, char* argv[])
 
     opts->monitor_period_ms = 100;
     opts->peak_seconds = 3.0;
-    opts->rms_seconds = 0.1;
 
     opts->monitor_fd = -1;
 
@@ -181,11 +179,100 @@ struct state {
     int mfd;
     int tfd;
     struct timespec monitor_period;
-    sample_t* mbuf;
-    size_t mi, mn;
-    size_t peak_frames;
-    uint64_t sqs; size_t rms_frames;
+    struct rms* rms;
+    struct peak* peak;
 };
+
+struct rms {
+    sample_t* buf;
+    size_t i, n;
+    uint64_t sqs;
+};
+
+static void rms_init(struct rms* rms, size_t n)
+{
+    // TODO: make sure uint64_t is big enough
+    rms->n = n;
+    rms->i = 0;
+    rms->sqs = 0;
+
+    rms->buf = calloc(rms->n, sizeof(sample_t));
+    CHECK_MALLOC(rms->buf);
+}
+
+static void rms_sample(struct rms* rms, sample_t s)
+{
+    sample_t t = rms->buf[rms->i];
+    rms->sqs -= t*t;
+    rms->buf[rms->i] = s;
+    rms->sqs += s*s;
+
+    rms->i += 1;
+    if(rms->i == rms->n) {
+        rms->i = 0;
+    }
+}
+
+static double rms(const struct rms* rms)
+{
+    return sqrt((double)rms->sqs/rms->n);
+}
+
+struct peak {
+    usample_t** buf;
+    size_t i, n, l;
+    usample_t peak;
+};
+
+static void peak_init(struct peak* peak, size_t n)
+{
+    peak->n = n;
+    peak->i = 0;
+
+    size_t m = 1, l = 0;
+    for(; m < peak->n; m <<= 1, l++) ;
+    peak->l = l;
+
+    peak->buf = calloc(l+1, sizeof(usample_t*));
+    CHECK_MALLOC(peak->buf);
+
+    for(size_t i = 0; m > 1; m >>= 1, i++) {
+        peak->buf[i] = calloc(m, sizeof(usample_t));
+        CHECK_MALLOC(peak->buf[i]);
+    }
+    peak->buf[l] = &peak->peak;
+}
+
+static void peak_sample(struct peak* peak, sample_t ss)
+{
+    usample_t s = ss >= 0 ? ss : -ss;
+    size_t i = peak->i;
+    size_t l = 0;
+    peak->buf[0][i] = s;
+    while(l < peak->l) {
+        size_t j = (i % 2) == 0 ? i + 1 : i - 1;
+        usample_t t = peak->buf[l][j];
+
+        usample_t u = peak->buf[l+1][i >> 1];
+        usample_t v = MAX(s, t);
+        if(u == v) {
+            break;
+        }
+
+        i >>= 1;
+        s = peak->buf[++l][i] = v;
+    }
+
+    peak->i += 1;
+    if(peak->i == peak->n) {
+        peak->i = 0;
+    }
+}
+
+static inline usample_t peak(struct peak* peak)
+{
+    return peak->peak;
+}
 
 static void timespec_from_ms(struct timespec* ts, unsigned int ms)
 {
@@ -227,22 +314,17 @@ static void monitor_init(struct state* st, const struct options* opts)
 
     timespec_from_ms(&st->monitor_period, opts->monitor_period_ms);
 
-    st->peak_frames = opts->peak_seconds * opts->rate;
-    if(st->peak_frames > st->fn) {
-        failwith("buffer too small for %f seconds of peak measurement",
-                 opts->peak_seconds);
+    st->rms = calloc(opts->channels, sizeof(struct rms));
+    CHECK_MALLOC(st->rms);
+    for(size_t i = 0; i < opts->channels; i++) {
+        rms_init(&st->rms[i], (size_t)opts->monitor_period_ms * opts->rate / 1000);
     }
 
-    st->rms_frames = opts->rms_seconds * opts->rate;
-    if(st->rms_frames > st->fn) {
-        failwith("buffer too small for %f seconds of RMS measurement",
-                 opts->rms_seconds);
+    st->peak = calloc(opts->channels, sizeof(struct peak));
+    CHECK_MALLOC(st->peak);
+    for(size_t i = 0; i < opts->channels; i++) {
+        peak_init(&st->peak[i], opts->peak_seconds * opts->rate);
     }
-
-    st->mn = MAX(st->peak_frames, st->rms_frames);
-    st->mi = 0;
-    st->mbuf = calloc(st->mn, st->f); CHECK_MALLOC(st->mbuf);
-    st->sqs = 0;
 }
 
 static void monitor_start(struct state* st)
@@ -279,40 +361,29 @@ static void monitor_tick(struct state* st)
         return;
     }
     if(ticks > 1) {
-        warning("missed monitor tick");
+        warning("missed monitor ticks: %zu", ticks - 1);
     }
 
-    usample_t rms = round(sqrtf((float)st->sqs/(st->rms_frames*st->channels)));
-
-    usample_t peak = 0;
-    for(size_t n = 0, i = st->mi; n < st->peak_frames; n++, i--) {
-        for(size_t j = 0; j < st->channels; j++) {
-            sample_t s = st->mbuf[i*st->channels + j];
-            usample_t abs = s >= 0 ? s : -s;
-            if(abs > peak) {
-                peak = abs;
-            }
-        }
-        if(i == 0) {
-            i = st->mn;
-        }
+    for(size_t i = 0; i < st->channels; i++) {
+        trace("channel %zu: RMS%%=%.2f peak%%=%.2f", i,
+              100.0*rms(&st->rms[i])/SAMPLE_MAX,
+              100.0*peak(&st->peak[i])/SAMPLE_MAX);
     }
-
-    trace("RMS%%=%.2f peak%%=%.2f",
-          100.0*rms/SAMPLE_MAX, 100.0*peak/SAMPLE_MAX);
 
     if(st->mfd >= 0) {
         struct __attribute__((__packed__)) {
             unsigned char state;
             uint64_t captured_frames;
-            usample_t rms;
-            usample_t peak;
-        } msg = {
-            .state = st->state,
-            .captured_frames = st->captured_frames,
-            .rms = rms,
-            .peak = peak,
-        };
+            usample_t rms[st->channels];
+            usample_t peak[st->channels];
+        } msg;
+        msg.state = st->state;
+        msg.captured_frames = st->captured_frames;
+
+        for(size_t i = 0; i < st->channels; i++) {
+            msg.rms[i] = round(rms(&st->rms[i]));
+            msg.peak[i] = peak(&st->peak[i]);
+        }
 
         ssize_t s = send(st->mfd, &msg, sizeof(msg), 0);
         if(s == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
@@ -330,41 +401,17 @@ static void monitor_handle_new_frames(struct state* st,
                                       const sample_t* samples,
                                       snd_pcm_uframes_t n)
 {
-    for(size_t i = 0; i < n * st->channels; i++) {
-        sample_t s = samples[i];
-
-        // global peak sample
-        usample_t abs = s >= 0 ? s : -s;
-        if(abs > st->global_peak) {
-            st->global_peak = abs;
-        }
-    }
-
-    // monitor buffer and measurements
-    sample_t* m = st->mbuf + st->mi*st->channels;
     for(size_t i = 0; i < n; i++) {
         for(size_t j = 0; j < st->channels; j++) {
             sample_t s = samples[i*st->channels+j];
 
-            // squares
-            {
-                st->sqs += (uint64_t)s*s;
-                uint64_t t;
-                if(st->rms_frames <= st->mi) {
-                    t = st->mbuf[(st->mi-st->rms_frames)*st->channels + j];
-                } else {
-                    t = st->mbuf[(st->mn-(st->rms_frames-st->mi))*st->channels + j];
-                }
-                st->sqs -= t*t;
-            }
+            rms_sample(&st->rms[j], s);
+            peak_sample(&st->peak[j], s);
 
-            *m = s;
-            m += 1;
-        }
-        st->mi += 1;
-        if(st->mi == st->mn) {
-            st->mi = 0;
-            m = st->mbuf;
+            usample_t abs = s >= 0 ? s : -s;
+            if(abs > st->global_peak) {
+                st->global_peak = abs;
+            }
         }
     }
 }
