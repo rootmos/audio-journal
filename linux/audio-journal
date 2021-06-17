@@ -524,7 +524,8 @@ def postprocess(profile, fn):
 
 class Recorder:
     class Settings:
-        def __init__(self, rate, devices, invert_match, ignore_case, extended_regex, post_connect_cooloff):
+        def __init__(self, channels, rate, devices, invert_match, ignore_case, extended_regex, post_connect_cooloff):
+            self.channels = channels
             self.rate = rate
             self.devices = devices
             self.invert_match = invert_match
@@ -534,6 +535,7 @@ class Recorder:
 
         def merge(self, override):
             return Recorder.Settings(
+                channels = override.channels if override.channels is not None else self.channels,
                 rate = override.rate if override.rate is not None else self.rate,
                 devices = override.devices if override.devices is not None else self.devices,
                 invert_match = override.invert_match if override.invert_match is not None else self.invert_match,
@@ -544,6 +546,7 @@ class Recorder:
 
         def default(args):
             d = Recorder.Settings(
+                channels = 2,
                 rate = 44100,
                 devices = None,
                 invert_match = False,
@@ -558,6 +561,7 @@ class Recorder:
 
         def from_json(j):
             return Recorder.Settings(
+                channels = j.get("channels"),
                 rate = j.get("rate"),
                 devices = j.get("devices"),
                 invert_match = j.get("invert_match"),
@@ -568,6 +572,7 @@ class Recorder:
 
         def __repr__(self):
             s = "Recorder.Settings("
+            s += f"channels={self.channels},"
             s += f"rate={self.rate},"
             s += f"devices={self.devices},"
             s += f"invert_match={self.invert_match},"
@@ -664,7 +669,7 @@ class Recorder:
 
         u = Recorder.Update(
             state=Recorder.State.NOT_RUNNING,
-            channels=2, # TODO: make configurable
+            channels=settings.channels,
             captured_frames=0,
             rate=settings.rate,
             rms=None,
@@ -673,7 +678,10 @@ class Recorder:
         for f in self.state_listeners:
             f(u)
 
-        args = [ "-r", str(settings.rate) ]
+        args = [
+            "-r", str(settings.rate),
+            "-c", str(settings.channels),
+        ]
         if settings.devices:
             device = await self.wait_for_device(settings)
             if device is None:
@@ -690,21 +698,26 @@ class Recorder:
                     pass
 
                 def datagram_received(server, data, addr):
-                    state = Recorder.State(data[0])
-                    captured_frames = int.from_bytes(data[1:9], byteorder=sys.byteorder)
+                    i = 0
 
-                    # TODO make configurable
-                    channels = 2
-                    rms = [
-                        int.from_bytes(data[9:11], byteorder=sys.byteorder),
-                        int.from_bytes(data[11:13], byteorder=sys.byteorder),
-                    ]
-                    peak = [
-                        int.from_bytes(data[13:15], byteorder=sys.byteorder),
-                        int.from_bytes(data[15:17], byteorder=sys.byteorder),
-                    ]
+                    state = Recorder.State(data[i])
+                    i += 1
 
-                    u = Recorder.Update(state=state, channels=channels, captured_frames=captured_frames, rate=settings.rate, rms=rms, peak=peak)
+                    captured_frames = int.from_bytes(data[i:i+8], byteorder=sys.byteorder)
+                    i += 8
+
+                    bytes_per_channel = 2
+
+                    rms = []
+                    for j in range(settings.channels):
+                        rms.append(int.from_bytes(data[i:i+bytes_per_channel], byteorder=sys.byteorder))
+                        i += bytes_per_channel
+
+                    peak = []
+                    for j in range(settings.channels):
+                        peak.append(int.from_bytes(data[i:i+bytes_per_channel], byteorder=sys.byteorder))
+
+                    u = Recorder.Update(state=state, channels=settings.channels, captured_frames=captured_frames, rate=settings.rate, rms=rms, peak=peak)
                     for f in self.state_listeners:
                         f(u)
 
@@ -972,6 +985,8 @@ class GUI:
         self.player = Player()
         self._profile = None
         self.sounds = {}
+        self.peak = []
+        self.rms = []
 
         self.root = tk.Tk(className="audio-journal")
         self.root.title("audio-journal")
@@ -993,29 +1008,16 @@ class GUI:
         self.profiles_view.grid(row=1, column=2, sticky=(tk.N, tk.S, tk.E, tk.W))
         self.profiles_view.bind("<<ListboxSelect>>", lambda e: self.handle_profile_select())
 
-        self.status = ttk.Label(self.root, text='00:00:00.000', font="TkFixedFont", anchor="center", relief="sunken")
+        self.status = ttk.Label(self.root, text=render_duration_numeric(0), font="TkFixedFont", anchor="center", relief="raised", borderwidth=3)
         self.status.grid(row=1, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
 
-        self.measurements = ttk.Frame(self.root)
+        self.measurements = ttk.Frame(self.root, relief="groove", borderwidth=5)
         self.measurements.grid(row=1, column=1, sticky=(tk.N, tk.S, tk.E, tk.W))
         self.measurements.columnconfigure(0, weight=1)
 
-        channels = 2 # TODO: make configurable
-        self.peak = []
-        self.rms = []
-        row = 0
-        for i in range(channels):
-            pb = ttk.Progressbar(self.measurements, orient=tk.HORIZONTAL, mode="determinate", maximum=32767)
-            pb.grid(row=row, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
-            self.measurements.rowconfigure(row, weight=1)
-            self.peak.append(pb)
-            row += 1
-
-            pb = ttk.Progressbar(self.measurements, orient=tk.HORIZONTAL, mode="determinate", maximum=32767)
-            pb.grid(row=row, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
-            self.measurements.rowconfigure(row, weight=5)
-            self.rms.append(pb)
-            row += 1
+        settings = Recorder.Settings.default(args)
+        self.recorder = Recorder(profile=self.profile, settings=settings)
+        self.populate_measurements(channels=settings.channels)
 
         self.root.columnconfigure(0, weight=1)
         self.root.columnconfigure(1, weight=5)
@@ -1035,8 +1037,6 @@ class GUI:
         self.root.bind("<Prior>", lambda e: self.prior())
         self.root.bind("<Next>", lambda e: self.next())
 
-        self.recorder = Recorder(profile=self.profile, settings=Recorder.Settings.default(args))
-
         self.update_queue = queue.Queue()
         self.recorder.add_state_listener(self.generate_state_update_event)
         self.root.bind("<<RecordingStateUpdate>>", self.handle_recording_state_update);
@@ -1045,24 +1045,53 @@ class GUI:
         self.recorder.add_sound_listener(self.generate_new_sound_event)
         self.root.bind("<<NewSound>>", self.handle_new_sounds);
 
+    def populate_measurements(self, channels):
+        while len(self.peak) < channels:
+            row = 2 * len(self.peak)
+            peak = ttk.Progressbar(self.measurements, orient=tk.HORIZONTAL, mode="determinate", maximum=32767)
+            peak.grid(row=row, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
+            self.measurements.rowconfigure(row, weight=1)
+            self.peak.append(peak)
+
+        while len(self.peak) > channels:
+            self.peak[-1].destroy()
+            del self.peak[-1]
+            self.measurements.rowconfigure(2*len(self.peak), weight=0)
+
+        while len(self.rms) < channels:
+            row = 2 * len(self.rms) + 1
+            rms = ttk.Progressbar(self.measurements, orient=tk.HORIZONTAL, mode="determinate", maximum=32767)
+            rms.grid(row=row, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
+            self.measurements.rowconfigure(row, weight=5)
+            self.rms.append(rms)
+
+        while len(self.rms) > channels:
+            self.rms[-1].destroy()
+            del self.rms[-1]
+            self.measurements.rowconfigure(2*len(self.rms)+1, weight=0)
+
     def generate_state_update_event(self, update):
         self.update_queue.put(update, block=False)
         self.root.event_generate("<<RecordingStateUpdate>>")
 
     def handle_recording_state_update(self, *args):
         update = None
+        missed_updates = 0
         try:
             while True:
-                update = self.update_queue.get(block=False)
+                u = self.update_queue.get(block=False)
+                if update is not None:
+                    missed_updates += 1
+                update = u
         except queue.Empty:
             pass
+        if missed_updates > 0:
+            logger.warn(f"missed recording state updates: {missed_updates}")
 
-        if update.rms is not None:
-            for i in range(update.channels):
-                self.rms[i]["value"] = update.rms[i]
-        if update.peak is not None:
-            for i in range(update.channels):
-                self.peak[i]["value"] = update.peak[i]
+        self.populate_measurements(channels=update.channels)
+        for i in range(update.channels):
+            self.rms[i]["value"] = update.rms[i] if update.rms is not None else 0
+            self.peak[i]["value"] = update.peak[i] if update.peak is not None else 0
 
         if update.state == Recorder.State.NOT_RUNNING:
             self.status["background"] = "grey"
