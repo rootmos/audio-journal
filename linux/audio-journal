@@ -637,7 +637,7 @@ class Recorder:
         if logger.level <= logging.DEBUG:
             logger.debug(f"running device: {device_exe} {args}")
         else:
-            logger.debug(f"waiting for devices: {settings.device}")
+            logger.info(f"waiting for devices: {settings.devices}")
 
         self.device_process = await asyncio.create_subprocess_exec(device_exe, *args, stdout=subprocess.PIPE)
         device = await self.device_process.stdout.readline()

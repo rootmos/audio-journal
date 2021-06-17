@@ -11,7 +11,17 @@
 #include <r.h>
 
 struct options {
+    enum {
+        UNKNOWN_CODEC = 0,
+        FLAC = 1,
+        MP3 = 2,
+    } codec;
+
     const char* lame;
+    float vbr;
+
+    const char* flac;
+
     const char* fn_template;
     const char* device;
     unsigned int channels;
@@ -34,6 +44,8 @@ static void print_usage(int fd, const char* prog)
     dprintf(fd, "usage: %s [OPTION]... FILENAME_TEMPLATE\n", prog);
     dprintf(fd, "\n");
     dprintf(fd, "options:\n");
+    dprintf(fd, "  -c CODEC    encode using CODEC (MP3 or FLAC)\n");
+    dprintf(fd, "  -V QUALITY  set desired VBR quality when using MP3 codec\n");
     dprintf(fd, "  -m MS       send and log audio measurements every MS milliseconds\n");
     dprintf(fd, "  -M FD       send audio measurements and metadata to FD\n");
     dprintf(fd, "  -s SEC      stop after detecting SEC seconds of silence\n");
@@ -46,7 +58,19 @@ static void print_usage(int fd, const char* prog)
 
 static void parse_opts(struct options* opts, int argc, char* argv[])
 {
-    opts->lame = "lame";
+    opts->codec = UNKNOWN_CODEC;
+
+    opts->lame = getenv("LAME");
+    if(opts->lame == NULL) {
+        opts->lame = "lame";
+    }
+    opts->vbr = 4.0;
+
+    opts->flac = getenv("FLAC");
+    if(opts->flac == NULL) {
+        opts->flac = "flac";
+    }
+
     opts->device = "default";
     opts->channels = 2;
     opts->rate = 44100;
@@ -63,8 +87,25 @@ static void parse_opts(struct options* opts, int argc, char* argv[])
     opts->monitor_fd = -1;
 
     int res;
-    while((res = getopt(argc, argv, "d:B:l:L:m:M:s:t:r:h")) != -1) {
+    while((res = getopt(argc, argv, "c:V:d:B:l:L:m:M:s:t:r:h")) != -1) {
         switch(res) {
+        case 'c':
+            if(strcmp(optarg, "MP3") == 0) {
+                opts->codec = MP3;
+            } else if(strcmp(optarg, "FLAC") == 0) {
+                opts->codec = FLAC;
+            } else {
+                dprintf(2, "unsupported codec: %s\n", optarg);
+                exit(1);
+            }
+            break;
+        case 'V':
+            res = sscanf(optarg, "%f", &opts->vbr);
+            if(res != 1 || opts->vbr < 0.0 || opts->vbr > 10.0) {
+                dprintf(2, "unable to parse as VBR quality: %s\n", optarg);
+                exit(1);
+            }
+            break;
         case 'd':
             opts->device = strdup(optarg);
             break;
@@ -138,6 +179,18 @@ static void parse_opts(struct options* opts, int argc, char* argv[])
     }
 
     opts->fn_template = argv[optind];
+
+    if(opts->codec == UNKNOWN_CODEC) {
+        size_t l = strlen(opts->fn_template);
+        if(l >= 4 && strcmp(".mp3", opts->fn_template + (l - 4)) == 0) {
+            opts->codec = MP3;
+        } else if(l >= 5 && strcmp(".flac", opts->fn_template + (l - 5)) == 0) {
+            opts->codec = FLAC;
+        } else {
+            dprintf(2, "unable to guess codec\n");
+            exit(1);
+        }
+    }
 }
 
 
@@ -593,29 +646,63 @@ static void encoder_start(struct state* st,
     r = close(fds[1]); CHECK(r, "close");
     r = dup2(fds[0], 0); CHECK(r, "dup2");
 
-    char* lame = strdup(opts->lame); CHECK_MALLOC(lame);
+    if(opts->codec == MP3) {
+        char* lame = strdup(opts->lame); CHECK_MALLOC(lame);
 
-    char rate[16];
-    ssize_t s = snprintf(LIT(rate), "%u.%u", opts->rate/1000, opts->rate%1000);
-    CHECK_IF(s < 0, "snprintf");
-    if(s == LENGTH(rate)) {
-        failwith("unable to render rate");
+        char rate[16];
+        ssize_t s = snprintf(LIT(rate), "%u.%u", opts->rate/1000, opts->rate%1000);
+        CHECK_IF(s < 0, "snprintf");
+        if(s == LENGTH(rate)) {
+            failwith("unable to render rate");
+        }
+
+        char vbr[16];
+        s = snprintf(LIT(vbr), "%f", opts->vbr);
+        CHECK_IF(s < 0, "snprintf");
+        if(s == LENGTH(vbr)) {
+            failwith("unable to render VBR");
+        }
+
+        char* args[] = {
+            lame,
+            "--silent",
+            "-V", vbr,
+            "-r",
+            "-m", "s", // channels
+            "-s", rate,
+            "--signed", "--bitwidth", "16", "--little-endian", // format
+            "-",
+            fn,
+            NULL,
+        };
+
+        r = execvp(lame, args); CHECK(r, "execvp: %s", lame);
+    } else if(opts->codec == FLAC) {
+        char* flac = strdup(opts->flac); CHECK_MALLOC(flac);
+
+        char rate[32];
+        ssize_t s = snprintf(LIT(rate), "--sample-rate=%u", opts->rate);
+        CHECK_IF(s < 0, "snprintf");
+        if(s == LENGTH(rate)) {
+            failwith("unable to render rate");
+        }
+
+        char* args[] = {
+            flac,
+            "--silent",
+            "--force-raw-format",
+            "--channels=2",
+            rate,
+            "--sign=signed", "--bps=16", "--endian=little", // format
+            "-o", fn,
+            "-",
+            NULL,
+        };
+
+        r = execvp(flac, args); CHECK(r, "execvp: %s", flac);
+    } else {
+        failwith("unknown codec: %d", opts->codec);
     }
-
-    char* args[] = {
-        lame,
-        "-v", "-B", "128", // VBR 128k
-        "--silent",
-        "-r",
-        "-m", "s", // channels
-        "-s", rate,
-        "--signed", "--bitwidth", "16", "--little-endian", // format
-        "-",
-        fn,
-        NULL,
-    };
-
-    r = execvp(opts->lame, args); CHECK(r, "execvp: %s", opts->lame);
 }
 
 static void encoder_write(struct state* st)
