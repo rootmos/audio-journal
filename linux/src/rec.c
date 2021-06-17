@@ -44,7 +44,8 @@ static void print_usage(int fd, const char* prog)
     dprintf(fd, "usage: %s [OPTION]... FILENAME_TEMPLATE\n", prog);
     dprintf(fd, "\n");
     dprintf(fd, "options:\n");
-    dprintf(fd, "  -c CODEC    encode using CODEC (MP3 or FLAC)\n");
+    dprintf(fd, "  -c CHANNELS set number of channels to record\n");
+    dprintf(fd, "  -C CODEC    encode using CODEC (MP3 or FLAC)\n");
     dprintf(fd, "  -V QUALITY  set desired VBR quality when using MP3 codec\n");
     dprintf(fd, "  -m MS       send and log audio measurements every MS milliseconds\n");
     dprintf(fd, "  -M FD       send audio measurements and metadata to FD\n");
@@ -87,9 +88,16 @@ static void parse_opts(struct options* opts, int argc, char* argv[])
     opts->monitor_fd = -1;
 
     int res;
-    while((res = getopt(argc, argv, "c:V:d:B:l:L:m:M:s:t:r:h")) != -1) {
+    while((res = getopt(argc, argv, "c:C:V:d:B:l:L:m:M:s:t:r:h")) != -1) {
         switch(res) {
         case 'c':
+            res = sscanf(optarg, "%u", &opts->channels);
+            if(res != 1) {
+                dprintf(2, "unable to parse number of channels: %s\n", optarg);
+                exit(1);
+            }
+            break;
+        case 'C':
             if(strcmp(optarg, "MP3") == 0) {
                 opts->codec = MP3;
             } else if(strcmp(optarg, "FLAC") == 0) {
@@ -509,17 +517,46 @@ static void add_lead_out_frames(struct state* st)
     }
 }
 
+static int host_is_little_endian(void)
+{
+    int n = 1;
+    return (*(char *)&n == 1) ? 1 : 0;
+}
+
 static void alsa_init(struct state* st, const struct options* opts)
 {
-    st->fn = opts->buffer_seconds * opts->rate;
-    st->channels = opts->channels;
-
     int r = snd_pcm_open(&st->pcm, opts->device,
-                         SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK);
+                     SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK);
     CHECK_ALSA(r, "failed to open device %s", opts->device);
 
+    const snd_pcm_format_t fmt = SND_PCM_FORMAT_S16_LE;
+
+    if(!host_is_little_endian()) {
+        failwith("unimplemented host endianness");
+    }
+
+    snd_pcm_hw_params_t* hw;
+    snd_pcm_hw_params_alloca(&hw);
+    r = snd_pcm_hw_params_any(st->pcm, hw);
+    CHECK_ALSA(r, "snd_pcm_hw_params_any");
+
+    if(snd_pcm_hw_params_test_format(st->pcm, hw, fmt) != 0) {
+        failwith("format not supported");
+    }
+
+    if(snd_pcm_hw_params_test_channels(st->pcm, hw, opts->channels) != 0) {
+        failwith("unsupported number of channels: %u", opts->channels);
+    }
+    st->channels = opts->channels;
+
+    if(snd_pcm_hw_params_test_rate(st->pcm, hw, opts->rate, 0) != 0) {
+        failwith("unsupported sampling rate: %u", opts->rate);
+    }
+
+    st->fn = opts->buffer_seconds * opts->rate;
+
     r = snd_pcm_set_params(st->pcm,
-                           SND_PCM_FORMAT_S16_LE,
+                           fmt,
                            SND_PCM_ACCESS_RW_INTERLEAVED,
                            st->channels,
                            opts->rate,
@@ -663,12 +700,21 @@ static void encoder_start(struct state* st,
             failwith("unable to render VBR");
         }
 
+        char* mode;
+        if(opts->channels == 1) {
+            mode = "m";
+        } else if(opts->channels == 2) {
+            mode = "s";
+        } else {
+            failwith("unsupported number of channels: %u", opts->channels); // or is it?
+        }
+
         char* args[] = {
             lame,
             "--silent",
             "-V", vbr,
             "-r",
-            "-m", "s", // channels
+            "-m", mode,
             "-s", rate,
             "--signed", "--bitwidth", "16", "--little-endian", // format
             "-",
@@ -687,11 +733,18 @@ static void encoder_start(struct state* st,
             failwith("unable to render rate");
         }
 
+        char channels[32];
+        s = snprintf(LIT(channels), "--channels=%u", opts->channels);
+        CHECK_IF(s < 0, "snprintf");
+        if(s == LENGTH(channels)) {
+            failwith("unable to render channels");
+        }
+
         char* args[] = {
             flac,
             "--silent",
             "--force-raw-format",
-            "--channels=2",
+            channels,
             rate,
             "--sign=signed", "--bps=16", "--endian=little", // format
             "-o", fn,
