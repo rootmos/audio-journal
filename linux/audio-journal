@@ -848,46 +848,80 @@ class Player:
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=lambda: self.loop.run_forever())
         self.thread.start()
+        self.max_active_players = 10
 
-    def _player(self, sound):
-        if sound.id not in self.players:
+    def _player(self, sound, populate=True):
+        if populate and sound.id not in self.players:
             target = sound.local or sound.url
             if target is None:
                 logger.warn(f"no available source for sound: {sound}")
                 return None
             self.players[sound.id] = MPV(target)
 
-        return self.players[sound.id]
+        return self.players.get(sound.id)
 
-    def load(self, sound):
+    async def _gc_players(self):
+        if len(self.players) <= self.max_active_players:
+            return
+
+        ps = sorted(self.players.items(), key=lambda p: p[1].last_played)
+        n = len(ps)
+        for i, p in ps[:-self.max_active_players]:
+            logger.debug(f"GC: player={p} sound.id={i}")
+            await p.stop()
+            del self.players[i]
+
+    async def _select(self, sound):
+        if self.current == sound:
+            return
+        elif self.current is not None:
+            p = self._player(self.current, populate=False)
+            if p is not None:
+                await p.pause()
+
+        self.current = sound
+        logger.debug(f"select: {sound}")
+
+    def select(self, sound):
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(self._select(sound)))
+
+    async def _toggle(self, sound):
+        logger.debug(f"toggle: {sound}")
+        await self._select(sound)
         p = self._player(sound)
-        if p.started is None:
-            self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.start()))
+        await p.toggle()
+        await self._gc_players()
 
     def toggle(self, sound):
-        p = self._player(sound)
-        logger.debug("toggle")
-        self.current = sound
-        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.toggle()))
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(self._toggle(sound)))
 
-    def pause(self, sound=None):
-        if sound is None:
-            sound = self.current
-        if sound is None:
-            return
-        p = self._player(sound)
-        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.pause()))
+    async def _seek(self, sound, **kwargs):
+        logger.debug(f"seek: {sound} {kwargs}")
+        await self._select(sound)
+        await self._player(sound).seek(**kwargs)
 
     def seek(self, sound, **kwargs):
-        p = self._player(sound)
-        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(p.seek(**kwargs)))
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(self._seek(sound, **kwargs)))
+
+    async def _pause(self):
+        if self.current is None:
+            return
+        p = self._player(self.current, populate=False)
+        if p is not None:
+            await p.pause()
+
+        logger.debug(f"pause: {self.current}")
+
+    def pause(self):
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(self._pause()))
+
+    async def _stop(self):
+        for p in self.players.values():
+            await p.stop()
+        self.loop.stop()
 
     def stop(self):
-        async def f():
-            for p in self.players.values():
-                await p.stop()
-            self.loop.stop()
-        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(f()))
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(self._stop()))
 
     def join(self):
         self.thread.join()
@@ -896,9 +930,23 @@ class MPV:
     def __init__(self, target):
         self.target = target
         self.started = None
+        self.last_played = None
         self.process = None
         self.ipc = None
         self.responses = {}
+        self.ready = None
+
+    def __repr__(self):
+        s = "MPV("
+        s += f"target={self.target},"
+        if self.process is None:
+            s += "process=None,"
+        else:
+            s += f"process={self.process.pid},"
+        s += f"started={self.started},"
+        s += f"last_played={self.last_played}"
+        s += ")"
+        return s
 
     async def send_command(self, *args):
         rid = random.randint(0, sys.maxsize)
@@ -914,16 +962,23 @@ class MPV:
             return rsp.get("data")
 
     async def toggle(self):
-        paused = await self.send_command("get_property", "pause")
-        await self.send_command("set_property", "pause", not paused)
+        if self.started is None:
+            await self.start()
+        else:
+            paused = await self.send_command("get_property", "pause")
+            if paused:
+                self.last_played = datetime.now()
+            await self.send_command("set_property", "pause", not paused)
 
     async def pause(self):
+        if self.started is None:
+            return
         await self.send_command("set_property", "pause", True)
 
-    async def resume(self):
-        await self.send_command("set_property", "pause", False)
-
     async def seek(self, relative=None, absolute=None, absolute_percent=None):
+        if self.started is None:
+            await self.start()
+
         if relative is not None:
             await self.send_command("seek", relative, "relative")
         if absolute is not None:
@@ -933,9 +988,11 @@ class MPV:
 
     async def start(self):
         if self.started is not None:
-            return
+            raise RuntimeError("starting already started player")
 
         loop = asyncio.get_running_loop()
+
+        self.ready = asyncio.Event()
 
         class Server:
             def connection_made(self, transport):
@@ -945,7 +1002,8 @@ class MPV:
                 e = json.loads(data.decode())
                 logger.debug(f"message from mpv: {e}")
                 if "event" in e:
-                    pass
+                    if e["event"] == "file-loaded":
+                        self.ready.set()
                 elif "request_id" in e and "error" in e:
                     rid = e["request_id"]
                     async def f():
@@ -960,7 +1018,6 @@ class MPV:
 
         mpv = os.environ.get("MPV", default="mpv")
         args = [
-            "--pause",
             "--no-terminal",
             "--keep-open", "--keep-open-pause=no",
             f"--input-ipc-client=fd://{w.fileno()}",
@@ -971,11 +1028,16 @@ class MPV:
         self.process = await asyncio.create_subprocess_exec(mpv, *args, close_fds=False)
         w.close()
         self.started = datetime.now()
+        logger.info(f"started player: pid={self.process.pid} target={self.target}")
+        await self.ready.wait()
+        logger.debug(f"player ready: pid={self.process.pid} target={self.target}")
+        self.last_played = datetime.now()
 
     async def stop(self):
         if self.process is not None:
             self.process.terminate()
             await self.process.wait()
+            logger.info(f"stopped player: pid={self.process.pid} target={self.target}")
             self.process = None
 
 class GUI:
@@ -1146,9 +1208,7 @@ class GUI:
         s = self.sounds_view.selection()
         if len(s) == 1:
             s = self.sounds[int(s[0])]
-            if self.player.current is not None and s != self.player.current:
-                self.player.pause(self.player.current)
-            self.player.load(s)
+            self.player.select(s)
         elif len(s) == 0:
             self.player.pause()
         else:
