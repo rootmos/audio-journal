@@ -13,14 +13,8 @@ install: build
 	install --strip -D -T $(BUILD)/rec $(PREFIX)/bin/audio-journal-rec
 	install --strip -D -T $(BUILD)/device $(PREFIX)/bin/audio-journal-device
 
-build: libr
+build:
 	$(MAKE) -C src
-
-libr: .libr.flag
-.libr.flag:
-	@mkdir -p "$(BUILD)"
-	$(MAKE) -C libr install PREFIX="$(BUILD)/usr"
-	@touch "$@"
 
 clean:
 	rm -rf $(BUILD) .*.flag

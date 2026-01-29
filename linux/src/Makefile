@@ -10,9 +10,9 @@ LDFLAGS += -L$(BUILD)/usr/lib
 all: $(foreach i, device rec, $(BUILD)/$(i))
 
 $(BUILD)/rec: rec.c
-	$(CC) -o "$@" $(CFLAGS) $< $(LDFLAGS) -lm -lr -lasound
+	$(CC) -o "$@" $(CFLAGS) $< $(LDFLAGS) -lm -lasound
 
 $(BUILD)/device: device.c
-	$(CC) -o "$@" $(CFLAGS) $(shell pkg-config libpulse --cflags) $< $(LDFLAGS) -lr $(shell pkg-config libpulse --libs)
+	$(CC) -o "$@" $(CFLAGS) $(shell pkg-config libpulse --cflags) $< $(LDFLAGS) $(shell pkg-config libpulse --libs)
 
 .PHONY: all

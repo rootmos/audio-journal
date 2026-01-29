@@ -2,8 +2,10 @@
 #include <regex.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
-#include <r.h>
+#define LIBR_IMPLEMENTATION
+#include "r.h"
 
 struct state {
     uint32_t choice;

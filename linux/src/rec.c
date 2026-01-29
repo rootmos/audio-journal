@@ -8,7 +8,16 @@
 
 #include <alsa/asoundlib.h>
 
-#include <r.h>
+#define LIBR_IMPLEMENTATION
+#include "r.h"
+
+#define CHECK_ALSA(err, format, ...) do { \
+    if(err < 0) { \
+        LIBR(failwith0)(__extension__ __FUNCTION__, __extension__ __FILE__, \
+            __extension__ __LINE__, 0, \
+            format ": %s\n", ##__VA_ARGS__, snd_strerror(err)); \
+    } \
+} while(0)
 
 struct options {
     enum {
